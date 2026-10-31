@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Obsidian workspace / state
+osu-vault/.obsidian/workspace.json
+osu-vault/.obsidian/workspace-mobile.json
+osu-vault/.obsidian/cache/
+
+# Local credentials / environment
+.env

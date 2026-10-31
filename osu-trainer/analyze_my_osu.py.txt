@@ -1,0 +1,31 @@
+# C:\Users\iples\Downloads\osu\osu-trainer\analyze_my_osu.py
+import sqlite3
+import os
+
+# Путь к базе данных lazer
+DB_PATH = r"C:\Users\iples\AppData\Local\osulazer\client.db"
+
+def analyze():
+    if not os.path.exists(DB_PATH):
+        print(f"Ошибка: База данных не найдена по пути {DB_PATH}")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Запрос последних 5 сыгранных карт
+    cursor.execute("""
+        SELECT ruleset_name, accuracy, beatmap_id, date 
+        FROM scores 
+        ORDER BY date DESC LIMIT 5
+    """)
+    
+    scores = cursor.fetchall()
+    print("--- Твои последние результаты ---")
+    for s in scores:
+        print(f"Режим: {s[0]}, Аккуратность: {s[1]:.2%}, Карта ID: {s[2]}")
+    
+    conn.close()
+
+if __name__ == "__main__":
+    analyze()
