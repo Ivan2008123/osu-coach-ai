@@ -1650,20 +1650,23 @@ def index():
                     document.getElementById('u-avatar').src = p.avatar_url;
                     document.getElementById('u-rank').innerText = '#' + (p.global_rank ? p.global_rank.toLocaleString() : '--');
                     document.getElementById('u-country-rank').innerText = '#' + (p.country_rank ? p.country_rank.toLocaleString() : '--');
-                    document.getElementById('u-pp').innerText = Math.round(p.pp_raw || 0).toLocaleString() + ' pp';
+                    const ppVal = (p.pp !== undefined) ? p.pp : (p.pp_raw || 0);
+                    const hoursVal = (p.play_time_hours !== undefined) ? p.play_time_hours : Math.round((p.play_time || 0) / 3600);
+
+                    document.getElementById('u-pp').innerText = Math.round(ppVal).toLocaleString() + ' pp';
                     document.getElementById('u-acc').innerText = (p.accuracy || 0).toFixed(2) + '%';
-                    document.getElementById('u-playtime').innerText = Math.round((p.play_time || 0) / 3600) + ' ч';
+                    document.getElementById('u-playtime').innerText = hoursVal + ' ч';
 
                     if (p.top_plays && p.top_plays.length) {
                         const box = document.getElementById('top-plays-box');
                         box.innerHTML = '';
                         p.top_plays.forEach(tp => {
                             box.innerHTML += `
-                                <a href="${tp.beatmap_url}" target="_blank" class="top-play-card">
+                                <a href="${tp.url || tp.beatmap_url || '#'}" target="_blank" class="top-play-card">
                                     <img src="${tp.cover_url}" class="tp-thumb" alt="Cover">
                                     <div style="overflow:hidden;">
                                         <div class="tp-title">${tp.title}</div>
-                                        <div class="tp-meta">${tp.version} • ${tp.accuracy}%</div>
+                                        <div class="tp-meta">${tp.version} • ${tp.acc || tp.accuracy}%</div>
                                     </div>
                                     <div class="tp-pp">${Math.round(tp.pp)}pp</div>
                                 </a>
