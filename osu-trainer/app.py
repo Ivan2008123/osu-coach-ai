@@ -8,12 +8,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 import osrparse
 from osu_api_client import get_official_profile_data
-from vault_sync import sync_score_to_vault
+from vault_sync import sync_score_to_vault, sync_rhythm_session_to_vault
 
-app = FastAPI(title="osu! Personal Coach")
+app = FastAPI(title="osu! Personal Coach AI")
 
 OSU_FILES_DIR = r"C:\Users\iples\AppData\Roaming\osu\files"
 EXPORTS_DIR = r"C:\Users\iples\AppData\Roaming\osu\exports"
+VAULT_DIR = r"C:\Users\iples\Downloads\osu\osu-vault"
 
 CURATED_MAP_PACKS = [
     {
@@ -375,6 +376,49 @@ def api_analyze(id: str = ""):
 def api_packs():
     return {"packs": CURATED_MAP_PACKS}
 
+@app.get("/api/vault/notes")
+def api_vault_notes():
+    notes = []
+    if os.path.exists(VAULT_DIR):
+        for f in sorted(os.listdir(VAULT_DIR)):
+            if f.endswith(".md"):
+                fp = os.path.join(VAULT_DIR, f)
+                try:
+                    mtime = os.path.getmtime(fp)
+                    with open(fp, "r", encoding="utf-8") as file:
+                        content = file.read()
+                    title = f.replace(".md", "")
+                    for line in content.strip().split("\n"):
+                        if line.startswith("# "):
+                            title = line.replace("# ", "").strip()
+                            break
+                    notes.append({
+                        "filename": f,
+                        "title": title,
+                        "mtime": datetime.fromtimestamp(mtime).strftime("%d.%m.%Y %H:%M"),
+                        "content": content
+                    })
+                except:
+                    pass
+    return {"notes": notes}
+
+@app.post("/api/vault/save-rhythm")
+async def api_save_rhythm(request: Request):
+    try:
+        data = await request.json()
+        success = sync_rhythm_session_to_vault(data)
+        return {"status": "ok" if success else "error"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/vault/open")
+def api_open_vault():
+    try:
+        os.system(f'explorer "{VAULT_DIR}"')
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return """
@@ -386,10 +430,11 @@ def index():
     <title>osu! Coach AI • CyberHUD Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700;800&family=Syne:wght@700;800;900&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
             --bg-base: #07080f;
-            --card-glass: rgba(18, 20, 36, 0.72);
+            --card-glass: rgba(18, 20, 36, 0.75);
             --card-border: rgba(255, 255, 255, 0.08);
             --neon-pink: #ff1361;
             --neon-cyan: #00fff2;
@@ -397,6 +442,7 @@ def index():
             --neon-green: #00ff88;
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
+            --accent-glow: rgba(0, 255, 242, 0.2);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -410,7 +456,6 @@ def index():
             position: relative;
         }
 
-        /* Live Canvas Background with dynamic interactive particles */
         #bgCanvas {
             position: fixed;
             top: 0; left: 0;
@@ -422,18 +467,18 @@ def index():
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 32px 24px;
+            padding: 24px;
             position: relative;
             z-index: 1;
         }
 
-        /* Glass Cards with Neon Glow & Shimmer */
+        /* Glass Cards */
         .cyber-card {
             background: var(--card-glass);
             backdrop-filter: blur(28px) saturate(190%);
             -webkit-backdrop-filter: blur(28px) saturate(190%);
             border: 1px solid var(--card-border);
-            border-radius: 24px;
+            border-radius: 20px;
             box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
             position: relative;
             overflow: hidden;
@@ -458,30 +503,30 @@ def index():
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 24px 32px;
-            margin-bottom: 24px;
+            padding: 20px 28px;
+            margin-bottom: 20px;
             border-color: rgba(255, 19, 97, 0.25);
-            box-shadow: 0 0 35px rgba(255, 19, 97, 0.15);
+            box-shadow: 0 0 30px rgba(255, 19, 97, 0.12);
         }
 
-        .user-block { display: flex; align-items: center; gap: 20px; }
+        .user-block { display: flex; align-items: center; gap: 18px; }
 
         .avatar-wrap {
             position: relative;
-            width: 72px; height: 72px;
+            width: 68px; height: 68px;
         }
 
         .user-avatar {
             width: 100%; height: 100%;
-            border-radius: 20px;
+            border-radius: 18px;
             object-fit: cover;
             border: 2px solid var(--neon-pink);
-            box-shadow: 0 0 25px rgba(255, 19, 97, 0.6);
+            box-shadow: 0 0 20px rgba(255, 19, 97, 0.5);
         }
 
         .user-titles h1 {
             font-family: 'Syne', sans-serif;
-            font-size: 26px; font-weight: 800;
+            font-size: 24px; font-weight: 800;
             display: flex; align-items: center; gap: 12px;
         }
 
@@ -490,24 +535,23 @@ def index():
             border: 1px solid var(--neon-green);
             color: var(--neon-green);
             font-size: 11px; font-weight: 800;
-            padding: 4px 12px; border-radius: 99px;
+            padding: 3px 10px; border-radius: 99px;
             text-transform: uppercase;
-            box-shadow: 0 0 15px rgba(0, 255, 136, 0.4);
             letter-spacing: 0.5px;
         }
 
         .user-ranks {
-            font-size: 14px; color: #94a3b8; margin-top: 4px;
+            font-size: 13.5px; color: #94a3b8; margin-top: 4px;
         }
-        .user-ranks b { color: #fff; font-family: 'JetBrains Mono', monospace; font-size: 15px; }
+        .user-ranks b { color: #fff; font-family: 'JetBrains Mono', monospace; font-size: 14.5px; }
 
         .hero-telemetry {
-            display: flex; gap: 36px;
+            display: flex; gap: 32px;
         }
 
         .t-item { text-align: right; }
         .t-val {
-            font-size: 26px; font-weight: 800;
+            font-size: 24px; font-weight: 800;
             font-family: 'JetBrains Mono', monospace;
             background: linear-gradient(135deg, #fff, #cbd5e1);
             -webkit-background-clip: text;
@@ -519,28 +563,74 @@ def index():
             letter-spacing: 0.8px; margin-top: 2px;
         }
 
-        /* 5-STAR READINESS GAUGE STRIP */
+        /* NAVIGATION TABS */
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 12px;
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #94a3b8;
+            padding: 10px 20px;
+            border-radius: 14px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+
+        .tab-btn.active {
+            color: #fff;
+            background: linear-gradient(135deg, rgba(255, 19, 97, 0.2), rgba(0, 255, 242, 0.15));
+            border-color: var(--neon-pink);
+            box-shadow: 0 0 15px rgba(255, 19, 97, 0.3);
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: tabFade 0.3s ease; }
+
+        @keyframes tabFade {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 5-STAR READINESS GAUGE */
         .readiness-strip {
-            background: linear-gradient(135deg, rgba(157, 0, 255, 0.15), rgba(255, 19, 97, 0.15));
-            border: 1px solid rgba(157, 0, 255, 0.4);
-            border-radius: 22px;
-            padding: 22px 30px;
-            margin-bottom: 28px;
+            background: linear-gradient(135deg, rgba(157, 0, 255, 0.12), rgba(255, 19, 97, 0.12));
+            border: 1px solid rgba(157, 0, 255, 0.35);
+            border-radius: 20px;
+            padding: 20px 28px;
+            margin-bottom: 24px;
             display: grid;
             grid-template-columns: 2fr 1fr 1fr;
-            gap: 28px;
+            gap: 24px;
             align-items: center;
-            box-shadow: 0 0 35px rgba(157, 0, 255, 0.2);
         }
 
         .gauge-title {
-            font-size: 18px; font-weight: 800;
+            font-size: 17px; font-weight: 800;
             font-family: 'Syne', sans-serif;
             display: flex; align-items: center; gap: 10px;
         }
 
         .gauge-track {
-            height: 12px; width: 100%;
+            height: 10px; width: 100%;
             background: rgba(255, 255, 255, 0.08);
             border-radius: 99px;
             margin-top: 10px;
@@ -553,25 +643,22 @@ def index():
             border-radius: 99px;
             width: 0%;
             transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
-            box-shadow: 0 0 20px var(--neon-cyan);
+            box-shadow: 0 0 15px var(--neon-cyan);
         }
 
-        .gauge-desc {
-            font-size: 13px; color: #cbd5e1; margin-top: 8px;
-        }
+        .gauge-desc { font-size: 13px; color: #cbd5e1; margin-top: 8px; }
 
         .stat-box {
             text-align: center;
-            padding: 12px 18px;
+            padding: 10px 16px;
             background: rgba(0, 0, 0, 0.35);
-            border-radius: 16px;
+            border-radius: 14px;
             border: 1px solid rgba(255, 255, 255, 0.06);
         }
         .sb-val {
-            font-size: 26px; font-weight: 900;
+            font-size: 24px; font-weight: 900;
             font-family: 'JetBrains Mono', monospace;
             color: var(--neon-cyan);
-            text-shadow: 0 0 15px rgba(0, 255, 242, 0.5);
         }
         .sb-lbl { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; margin-top: 2px; }
 
@@ -579,243 +666,483 @@ def index():
         .top-plays-row {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            margin-bottom: 28px;
+            gap: 14px;
+            margin-bottom: 24px;
         }
 
         .top-play-card {
             background: rgba(255, 255, 255, 0.02);
             border: 1px solid var(--card-border);
-            border-radius: 18px;
-            padding: 14px 16px;
-            display: flex; align-items: center; gap: 14px;
+            border-radius: 16px;
+            padding: 12px 14px;
+            display: flex; align-items: center; gap: 12px;
             text-decoration: none; color: inherit;
             transition: all 0.25s ease;
         }
 
         .top-play-card:hover {
-            transform: translateY(-4px);
+            transform: translateY(-3px);
             border-color: var(--neon-cyan);
-            box-shadow: 0 10px 30px rgba(0, 255, 242, 0.25);
             background: rgba(255, 255, 255, 0.05);
         }
 
         .tp-thumb {
-            width: 52px; height: 52px;
-            border-radius: 12px; object-fit: cover;
+            width: 48px; height: 48px;
+            border-radius: 10px;
+            object-fit: cover;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        .tp-info h5 {
-            font-size: 14px; font-weight: 700;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-            max-width: 250px;
-        }
-        .tp-info p { font-size: 12px; color: #94a3b8; margin-top: 2px; }
-        .tp-pp {
-            margin-left: auto;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 17px; font-weight: 800;
-            color: var(--neon-cyan);
-        }
+        .tp-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .tp-meta { font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
+        .tp-pp { font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 800; color: var(--neon-green); margin-left: auto; }
 
         /* Core Grid */
         .core-grid {
             display: grid;
-            grid-template-columns: 1fr 430px;
-            gap: 28px;
+            grid-template-columns: 2.1fr 1fr;
+            gap: 24px;
         }
 
-        .panel-pad { padding: 28px; margin-bottom: 24px; }
-
+        .panel-pad { padding: 24px; margin-bottom: 24px; }
         .panel-head {
             display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 22px;
+            margin-bottom: 20px;
         }
-
-        .panel-title {
-            font-size: 20px; font-weight: 800;
-            font-family: 'Syne', sans-serif;
-            display: flex; align-items: center; gap: 10px;
-        }
+        .panel-title { font-size: 18px; font-weight: 800; font-family: 'Syne', sans-serif; display: flex; align-items: center; gap: 10px; }
 
         .focus-pill {
-            background: linear-gradient(135deg, rgba(255, 19, 97, 0.2), rgba(157, 0, 255, 0.2));
+            background: rgba(255, 19, 97, 0.12);
             border: 1px solid var(--neon-pink);
             color: var(--neon-pink);
-            font-size: 11px; font-weight: 800;
-            padding: 5px 14px; border-radius: 99px;
+            font-size: 11px; font-weight: 700;
+            padding: 4px 12px; border-radius: 99px;
             text-transform: uppercase;
-            box-shadow: 0 0 15px rgba(255, 19, 97, 0.35);
         }
 
-        /* Metric Tiles */
+        /* 4 Big Tiles */
         .metric-tiles {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 14px;
-            margin-bottom: 24px;
+            gap: 12px;
+            margin-bottom: 20px;
         }
 
         .tile {
-            background: rgba(255, 255, 255, 0.02);
+            background: rgba(0, 0, 0, 0.35);
             border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 16px;
-            padding: 18px 14px;
-            text-align: center;
-            transition: 0.2s ease;
+            border-radius: 14px;
+            padding: 14px 16px;
         }
-        .tile:hover {
-            border-color: rgba(255, 255, 255, 0.15);
-            background: rgba(255, 255, 255, 0.04);
-        }
+        .tile-lbl { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 4px; }
+        .tile-val { font-size: 24px; font-weight: 900; font-family: 'JetBrains Mono', monospace; }
 
-        .tile-val {
-            font-size: 32px; font-weight: 900;
-            font-family: 'JetBrains Mono', monospace;
-            margin-top: 4px;
-        }
-        .tile-lbl {
-            font-size: 11px; font-weight: 700;
-            text-transform: uppercase; color: #64748b;
-            letter-spacing: 0.7px;
-        }
-
-        .acc-green { color: var(--neon-green); text-shadow: 0 0 20px rgba(0, 255, 136, 0.4); }
-        .acc-yellow { color: #f59e0b; text-shadow: 0 0 20px rgba(245, 158, 11, 0.4); }
-        .acc-red { color: var(--neon-pink); text-shadow: 0 0 20px rgba(255, 19, 97, 0.4); }
-
-        /* Skill Matrix */
+        /* Skill Radar */
         .skill-matrix {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin-bottom: 24px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
         }
 
         .skill-box {
             background: rgba(255, 255, 255, 0.02);
-            border: 1px solid rgba(255, 255, 255, 0.04);
-            border-radius: 14px;
-            padding: 14px 18px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 12px;
+            padding: 12px 14px;
+        }
+        .skill-head { display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 700; margin-bottom: 6px; }
+        .skill-track { height: 6px; background: rgba(255, 255, 255, 0.08); border-radius: 99px; overflow: hidden; }
+        .skill-fill { height: 100%; border-radius: 99px; transition: width 1s ease; }
+        .sf-acc { background: var(--neon-green); }
+        .sf-aim { background: var(--neon-cyan); }
+        .sf-stam { background: var(--neon-pink); }
+        .sf-cons { background: var(--neon-purple); }
+
+        /* Chart Dual */
+        .charts-dual {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-top: 20px;
+        }
+        .chart-wrap {
+            background: rgba(0, 0, 0, 0.28);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 14px;
+            height: 220px;
         }
 
-        .skill-head {
-            display: flex; justify-content: space-between;
-            font-size: 13.5px; font-weight: 600; margin-bottom: 8px;
+        /* Right Column Side Panel */
+        .replay-select-box {
+            display: flex; gap: 8px; margin-bottom: 20px;
+        }
+        .osu-select {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            padding: 10px 14px;
+            border-radius: 12px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 13.5px;
+            outline: none;
+        }
+        .osu-btn {
+            background: var(--neon-pink);
+            border: none;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 13.5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .osu-btn:hover {
+            filter: brightness(1.15);
+            box-shadow: 0 0 15px rgba(255, 19, 97, 0.4);
         }
 
-        .skill-track {
-            height: 8px; width: 100%;
-            background: rgba(255, 255, 255, 0.06);
-            border-radius: 99px; overflow: hidden;
-        }
-
-        .skill-fill {
-            height: 100%; border-radius: 99px;
-            transition: width 1s ease;
-        }
-
-        .sf-acc { background: linear-gradient(90deg, #00ff88, #00fff2); box-shadow: 0 0 10px #00fff2; }
-        .sf-aim { background: linear-gradient(90deg, #ff1361, #ff80bf); box-shadow: 0 0 10px #ff1361; }
-        .sf-stam { background: linear-gradient(90deg, #9d00ff, #d946ef); box-shadow: 0 0 10px #9d00ff; }
-        .sf-cons { background: linear-gradient(90deg, #f59e0b, #fbbf24); box-shadow: 0 0 10px #f59e0b; }
-
-        /* Feedbacks */
-        .feedback-item {
-            display: flex; gap: 16px;
-            padding: 16px 20px; border-radius: 16px;
+        .feedback-card {
+            background: rgba(255, 255, 255, 0.02);
+            border-left: 4px solid #64748b;
+            border-radius: 0 12px 12px 0;
+            padding: 12px 14px;
             margin-bottom: 12px;
-            border-left: 4px solid;
-            background: rgba(255, 255, 255, 0.02);
         }
+        .fb-danger { border-left-color: var(--neon-pink); background: rgba(255, 19, 97, 0.04); }
+        .fb-warning { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.04); }
+        .fb-success { border-left-color: var(--neon-green); background: rgba(0, 255, 136, 0.04); }
+        .fb-title { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+        .fb-text { font-size: 12.5px; color: #94a3b8; line-height: 1.45; }
 
-        .fb-danger { border-color: var(--neon-pink); background: rgba(255, 19, 97, 0.06); }
-        .fb-warning { border-color: #f59e0b; background: rgba(245, 158, 11, 0.06); }
-        .fb-success { border-color: var(--neon-green); background: rgba(0, 255, 136, 0.06); }
-
-        .fb-badge {
-            align-self: flex-start;
-            font-size: 10.5px; font-weight: 800;
-            padding: 3px 10px; border-radius: 6px;
-            text-transform: uppercase;
+        /* Map Pack Card */
+        .pack-card {
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 14px;
         }
-        .fb-danger .fb-badge { background: var(--neon-pink); color: #fff; }
-        .fb-warning .fb-badge { background: #f59e0b; color: #000; }
-        .fb-success .fb-badge { background: var(--neon-green); color: #000; }
-
-        .fb-content h4 { font-size: 15px; font-weight: 700; margin-bottom: 3px; }
-        .fb-content p { font-size: 13px; color: #94a3b8; line-height: 1.5; }
-
-        /* Right Panel */
-        .session-select {
-            width: 100%;
-            background: #0d0f1a;
-            border: 1px solid var(--card-border);
-            color: #fff; padding: 13px 16px;
-            border-radius: 14px; font-size: 13.5px;
-            font-family: inherit; margin-bottom: 14px;
-            outline: none; cursor: pointer;
-        }
-
-        .btn-sync-neon {
-            background: linear-gradient(135deg, var(--neon-pink), var(--neon-purple));
-            border: none; color: #fff;
-            padding: 14px 20px; border-radius: 14px;
-            font-weight: 800; font-size: 14px;
-            cursor: pointer; width: 100%;
-            box-shadow: 0 0 25px rgba(255, 19, 97, 0.45);
-            transition: 0.25s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .btn-sync-neon:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 0 35px rgba(255, 19, 97, 0.75);
-        }
-
-        .pack-item {
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px solid var(--card-border);
-            border-radius: 18px;
-            padding: 18px; margin-bottom: 16px;
-            transition: 0.25s ease;
-        }
-
-        .pack-item.active-rec {
+        .pack-rec {
             border-color: var(--neon-pink);
-            background: rgba(255, 19, 97, 0.05);
-            box-shadow: 0 0 30px rgba(255, 19, 97, 0.2);
+            box-shadow: 0 0 20px rgba(255, 19, 97, 0.2);
         }
-
         .pack-meta-row { display: flex; gap: 8px; margin: 8px 0; }
         .pill-meta {
             background: rgba(255, 255, 255, 0.06);
-            padding: 3px 8px; border-radius: 6px;
-            font-size: 11px; font-weight: 700; color: #94a3b8;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
         }
-
-        .map-dl-link {
+        .map-item-link {
             display: flex; justify-content: space-between; align-items: center;
-            padding: 11px 14px; border-radius: 12px;
-            background: rgba(0, 0, 0, 0.35);
-            border: 1px solid rgba(255, 255, 255, 0.04);
-            margin-top: 8px; text-decoration: none;
-            color: #fff; font-size: 13px;
-            transition: 0.2s ease;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            margin-top: 6px;
+            text-decoration: none;
+            color: #cbd5e1;
+            font-size: 12.5px;
+            transition: all 0.2s ease;
         }
-
-        .map-dl-link:hover {
-            background: rgba(255, 19, 97, 0.2);
-            border-color: rgba(255, 19, 97, 0.5);
-            transform: translateX(4px);
-        }
-
-        .diff-tag {
+        .map-item-link:hover {
+            background: rgba(255, 255, 255, 0.08);
             color: var(--neon-cyan);
+            transform: translateX(3px);
+        }
+
+        /* ------------------ TAB 2: RHYTHM TRAINER ------------------ */
+        .trainer-container {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 24px;
+        }
+
+        .hit-arena {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            position: relative;
+            user-select: none;
+        }
+
+        .target-circle {
+            width: 140px; height: 140px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255, 19, 97, 0.25) 0%, rgba(18, 20, 36, 0.8) 70%);
+            border: 3px solid var(--neon-pink);
+            box-shadow: 0 0 35px rgba(255, 19, 97, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Syne', sans-serif;
+            font-size: 26px;
+            font-weight: 900;
+            color: #fff;
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.08s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .target-circle:active {
+            transform: scale(0.94);
+        }
+
+        .target-circle.beat-pulse {
+            transform: scale(1.08);
+            border-color: var(--neon-cyan);
+            box-shadow: 0 0 45px rgba(0, 255, 242, 0.7);
+        }
+
+        .ripple-ring {
+            position: absolute;
+            width: 140px; height: 140px;
+            border-radius: 50%;
+            border: 2px solid var(--neon-cyan);
+            pointer-events: none;
+            opacity: 0;
+        }
+
+        .ripple-ring.animate {
+            animation: ringApproach 0.4s ease-out;
+        }
+
+        @keyframes ringApproach {
+            0% { transform: scale(1.7); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 0; }
+        }
+
+        /* Timing Error Bar */
+        .timing-bar-container {
+            width: 100%;
+            max-width: 500px;
+            margin: 32px 0 16px;
+        }
+
+        .timing-bar {
+            height: 18px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 99px;
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .zone-300 {
+            position: absolute;
+            left: 45%; width: 10%; height: 100%;
+            background: rgba(0, 255, 136, 0.4);
+            border-left: 1px solid var(--neon-green);
+            border-right: 1px solid var(--neon-green);
+        }
+        .zone-100 {
+            position: absolute;
+            left: 30%; width: 40%; height: 100%;
+            background: rgba(245, 158, 11, 0.15);
+        }
+        .zone-center {
+            position: absolute;
+            left: 50%; width: 2px; height: 100%;
+            background: #fff;
+            transform: translateX(-50%);
+            box-shadow: 0 0 6px #fff;
+        }
+
+        .timing-needle {
+            position: absolute;
+            top: 0; left: 50%; width: 4px; height: 100%;
+            background: var(--neon-cyan);
+            border-radius: 99px;
+            transform: translateX(-50%);
+            transition: left 0.1s ease;
+            box-shadow: 0 0 12px var(--neon-cyan);
+        }
+
+        .timing-labels {
+            display: flex; justify-content: space-between;
+            font-size: 11px; font-weight: 700; color: #64748b;
+            margin-top: 6px;
+        }
+
+        .hit-feedback-text {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 12px; font-weight: 700;
+            font-size: 20px;
+            font-weight: 800;
+            margin-top: 8px;
+            height: 28px;
+        }
+
+        .key-hints {
+            display: flex; gap: 14px; margin-top: 24px;
+        }
+        .key-badge {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+            padding: 8px 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 15px;
+            font-weight: 800;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .key-badge.pressed {
+            background: var(--neon-pink);
+            border-color: var(--neon-pink);
+            box-shadow: 0 0 18px var(--neon-pink);
+        }
+
+        /* ------------------ TAB 3: BEATMAP HUB ------------------ */
+        .hub-filters {
+            display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;
+        }
+        .filter-btn {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #94a3b8;
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .filter-btn:hover, .filter-btn.active {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--neon-cyan);
+        }
+
+        .hub-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 16px;
+        }
+
+        .hub-card {
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: all 0.25s ease;
+        }
+        .hub-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--neon-cyan);
+            box-shadow: 0 10px 30px rgba(0, 255, 242, 0.15);
+        }
+        .hub-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+        .hub-card-title { font-size: 15px; font-weight: 800; font-family: 'Syne', sans-serif; color: #fff; }
+        .hub-diff-badge {
+            background: linear-gradient(135deg, rgba(255, 19, 97, 0.3), rgba(157, 0, 255, 0.3));
+            border: 1px solid var(--neon-pink);
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 800;
+            padding: 3px 8px;
+            border-radius: 6px;
+            white-space: nowrap;
+        }
+
+        /* ------------------ TAB 4: SECOND BRAIN OBSIDIAN ------------------ */
+        .vault-split {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 20px;
+            height: 720px;
+        }
+
+        .vault-list {
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 14px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .vault-note-item {
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .vault-note-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+        .vault-note-item.active {
+            background: rgba(0, 255, 242, 0.1);
+            border-color: var(--neon-cyan);
+        }
+        .v-note-title { font-size: 13.5px; font-weight: 700; color: #fff; margin-bottom: 2px; }
+        .v-note-mtime { font-size: 11px; color: #64748b; font-family: 'JetBrains Mono', monospace; }
+
+        .vault-reader {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 28px;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+            font-family: 'Syne', sans-serif;
+            color: #fff;
+            margin-top: 18px;
+            margin-bottom: 10px;
+        }
+        .markdown-body h1 { font-size: 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 8px; }
+        .markdown-body h2 { font-size: 18px; color: var(--neon-cyan); }
+        .markdown-body p { margin-bottom: 12px; color: #cbd5e1; font-size: 14px; }
+        .markdown-body ul, .markdown-body ol { margin-left: 20px; margin-bottom: 14px; color: #cbd5e1; font-size: 14px; }
+        .markdown-body table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+        .markdown-body th, .markdown-body td { border: 1px solid rgba(255, 255, 255, 0.1); padding: 8px 12px; }
+        .markdown-body th { background: rgba(255, 255, 255, 0.05); color: #fff; font-weight: 700; }
+        .markdown-body code { background: rgba(255, 255, 255, 0.08); padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; }
+
+        /* Toast notification */
+        #toast {
+            position: fixed;
+            bottom: 24px; right: 24px;
+            background: #12131c;
+            border: 1px solid var(--neon-cyan);
+            box-shadow: 0 10px 30px rgba(0, 255, 242, 0.3);
+            color: #fff;
+            padding: 14px 20px;
+            border-radius: 14px;
+            font-weight: 600;
+            font-size: 13.5px;
+            z-index: 9999;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        #toast.show {
+            transform: translateY(0);
+            opacity: 1;
         }
     </style>
 </head>
@@ -855,162 +1182,381 @@ def index():
             </div>
         </div>
 
-        <!-- 5-Star Readiness Gauge -->
-        <div class="readiness-strip">
-            <div>
-                <div class="gauge-title">
-                    🎯 Индекс Готовности к 5★ (Target Milestone)
-                    <span style="font-size:12px; color:var(--neon-cyan); font-weight:normal;">[Режим: 5★ на 90%+ pass]</span>
+        <!-- Navigation Tabs Bar -->
+        <div class="nav-tabs">
+            <button class="tab-btn active" onclick="switchTab('hud')">⚡ HUD & Аналитика</button>
+            <button class="tab-btn" onclick="switchTab('trainer')">🎵 Ритм-Тренажёр (Разминка)</button>
+            <button class="tab-btn" onclick="switchTab('hub')">🗺️ Каталог карт (Beatmap Hub)</button>
+            <button class="tab-btn" onclick="switchTab('vault')">🧠 Вторая память (Obsidian)</button>
+            <button class="tab-btn" onclick="switchTab('settings')">⚙️ Тюнинг & Настройки</button>
+        </div>
+
+        <!-- ================= TAB 1: HUD & АНАЛИТИКА ================= -->
+        <div id="tab-hud" class="tab-content active">
+            <!-- 5-Star Readiness Gauge -->
+            <div class="readiness-strip">
+                <div>
+                    <div class="gauge-title">
+                        🎯 Индекс Готовности к 5★ (Target Milestone)
+                        <span style="font-size:12px; color:var(--neon-cyan); font-weight:normal;">[Цель: 5★ на 90%+ pass]</span>
+                    </div>
+                    <div class="gauge-track">
+                        <div class="gauge-fill" id="gauge-bar"></div>
+                    </div>
+                    <div class="gauge-desc" id="gauge-desc">
+                        Идет расчет готовности мышечной памяти...
+                    </div>
                 </div>
-                <div class="gauge-track">
-                    <div class="gauge-fill" id="gauge-bar"></div>
+                <div class="stat-box">
+                    <div class="sb-val" id="gauge-percent">--%</div>
+                    <div class="sb-lbl">Готовность к 5★</div>
                 </div>
-                <div class="gauge-desc" id="gauge-desc">
-                    Идет расчет готовности мышечной памяти...
+                <div class="stat-box">
+                    <div class="sb-val" style="color:var(--neon-green);" id="potential-pp">+-- pp</div>
+                    <div class="sb-lbl">Потенциал при 95% Acc</div>
                 </div>
             </div>
-            <div class="stat-box">
-                <div class="sb-val" id="gauge-percent">--%</div>
-                <div class="sb-lbl">Готовность к 5★</div>
+
+            <!-- Top Plays Row -->
+            <div style="margin-bottom: 12px; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">
+                🏆 Твои Топовые Ссылки (Official Top Plays)
             </div>
-            <div class="stat-box">
-                <div class="sb-val" style="color:var(--neon-green);" id="potential-pp">+-- pp</div>
-                <div class="sb-lbl">Потенциал при 95% Acc</div>
+            <div class="top-plays-row" id="top-plays-box"></div>
+
+            <!-- Core Grid -->
+            <div class="core-grid">
+                <!-- Left Column -->
+                <div>
+                    <div class="cyber-card panel-pad">
+                        <div class="panel-head">
+                            <div class="panel-title">
+                                <span id="map-header">Загрузка игры...</span>
+                            </div>
+                            <div class="focus-pill" id="focus-pill">Фокус: Анализ</div>
+                        </div>
+
+                        <!-- 4 Big Tiles -->
+                        <div class="metric-tiles">
+                            <div class="tile">
+                                <div class="tile-lbl">Точность (ACC)</div>
+                                <div class="tile-val" id="val-acc">--%</div>
+                            </div>
+                            <div class="tile">
+                                <div class="tile-lbl">300 / 100 / 50</div>
+                                <div class="tile-val" style="font-size:18px; color:#c084fc;" id="val-hits">--</div>
+                            </div>
+                            <div class="tile">
+                                <div class="tile-lbl">Промахи (Miss)</div>
+                                <div class="tile-val" style="color:var(--neon-pink);" id="val-miss">--</div>
+                            </div>
+                            <div class="tile">
+                                <div class="tile-lbl">Макс комбо</div>
+                                <div class="tile-val" style="color:var(--neon-cyan);" id="val-combo">--x</div>
+                            </div>
+                        </div>
+
+                        <!-- Skill Matrix -->
+                        <div style="margin-bottom: 20px;">
+                            <div style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 10px;">
+                                ДНК Игрока (Skill Radar Breakdown)
+                            </div>
+                            <div class="skill-matrix">
+                                <div class="skill-box">
+                                    <div class="skill-head">
+                                        <span>Ритм & Аккураси</span>
+                                        <span id="sk-acc-val">--%</span>
+                                    </div>
+                                    <div class="skill-track"><div class="skill-fill sf-acc" id="sk-acc-bar" style="width:0%;"></div></div>
+                                </div>
+                                <div class="skill-box">
+                                    <div class="skill-head">
+                                        <span>Аим мыши (Snap & Precision)</span>
+                                        <span id="sk-aim-val">--%</span>
+                                    </div>
+                                    <div class="skill-track"><div class="skill-fill sf-aim" id="sk-aim-bar" style="width:0%;"></div></div>
+                                </div>
+                                <div class="skill-box">
+                                    <div class="skill-head">
+                                        <span>Баланс пальцев & Стамина</span>
+                                        <span id="sk-stam-val">--%</span>
+                                    </div>
+                                    <div class="skill-track"><div class="skill-fill sf-stam" id="sk-stam-bar" style="width:0%;"></div></div>
+                                </div>
+                                <div class="skill-box">
+                                    <div class="skill-head">
+                                        <span>Стабильность комбо</span>
+                                        <span id="sk-cons-val">--%</span>
+                                    </div>
+                                    <div class="skill-track"><div class="skill-fill sf-cons" id="sk-cons-bar" style="width:0%;"></div></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Dual Charts -->
+                        <div class="charts-dual">
+                            <div class="chart-wrap">
+                                <canvas id="hitsChart"></canvas>
+                            </div>
+                            <div class="chart-wrap">
+                                <canvas id="fingersChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Coach Feedbacks -->
+                    <div class="cyber-card panel-pad">
+                        <div class="panel-head">
+                            <div class="panel-title">🔬 Диагностика и Разбор Ошибок</div>
+                        </div>
+                        <div id="coach-feedbacks"></div>
+                    </div>
+                </div>
+
+                <!-- Right Column -->
+                <div>
+                    <!-- Replay Selector -->
+                    <div class="cyber-card panel-pad">
+                        <div class="panel-head">
+                            <div class="panel-title">🎮 История сессий lazer</div>
+                        </div>
+                        <div class="replay-select-box">
+                            <select id="replay-dropdown" class="osu-select"></select>
+                        </div>
+                        <button class="osu-btn" style="width:100%;" onclick="loadReplay()">
+                            ⚡ Анализировать выбранную игру
+                        </button>
+                    </div>
+
+                    <!-- Recommended Training Map Pack -->
+                    <div class="cyber-card panel-pad">
+                        <div class="panel-head">
+                            <div class="panel-title">🎯 Рекомендованные Карты</div>
+                        </div>
+                        <div id="recommended-packs"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Top Plays -->
-        <div style="margin-bottom: 12px; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">
-            🏆 Твои Топовые Ссылки (Official Top Plays)
-        </div>
-        <div class="top-plays-row" id="top-plays-box"></div>
-
-        <!-- Core Grid -->
-        <div class="core-grid">
-            <!-- Left Column -->
-            <div>
-                <div class="cyber-card panel-pad">
-                    <div class="panel-head">
-                        <div class="panel-title">
-                            <span id="map-header">Загрузка игры...</span>
-                        </div>
-                        <div class="focus-pill" id="focus-pill">Фокус: Анализ</div>
-                    </div>
-
-                    <!-- 4 Big Tiles -->
-                    <div class="metric-tiles">
-                        <div class="tile">
-                            <div class="tile-lbl">Точность (ACC)</div>
-                            <div class="tile-val" id="val-acc">--%</div>
-                        </div>
-                        <div class="tile">
-                            <div class="tile-lbl">300 / 100 / 50</div>
-                            <div class="tile-val" style="font-size:20px; color:#c084fc;" id="val-hits">--</div>
-                        </div>
-                        <div class="tile">
-                            <div class="tile-lbl">Промахи (Miss)</div>
-                            <div class="tile-val" style="color:var(--neon-pink);" id="val-miss">--</div>
-                        </div>
-                        <div class="tile">
-                            <div class="tile-lbl">Макс комбо</div>
-                            <div class="tile-val" style="color:var(--neon-cyan);" id="val-combo">--x</div>
-                        </div>
-                    </div>
-
-                    <!-- Skill Matrix -->
-                    <div style="margin-bottom: 22px;">
-                        <div style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 10px;">
-                            ДНК Игрока (Skill Radar Breakdown)
-                        </div>
-                        <div class="skill-matrix">
-                            <div class="skill-box">
-                                <div class="skill-head">
-                                    <span>Ритм & Аккураси</span>
-                                    <span id="sk-acc-val">--%</span>
-                                </div>
-                                <div class="skill-track">
-                                    <div class="skill-fill sf-acc" id="sk-acc-bar" style="width:0%;"></div>
-                                </div>
-                            </div>
-                            <div class="skill-box">
-                                <div class="skill-head">
-                                    <span>Аим мыши (Snap & Precision)</span>
-                                    <span id="sk-aim-val">--%</span>
-                                </div>
-                                <div class="skill-track">
-                                    <div class="skill-fill sf-aim" id="sk-aim-bar" style="width:0%;"></div>
-                                </div>
-                            </div>
-                            <div class="skill-box">
-                                <div class="skill-head">
-                                    <span>Баланс пальцев & Стамина</span>
-                                    <span id="sk-stam-val">--%</span>
-                                </div>
-                                <div class="skill-track">
-                                    <div class="skill-fill sf-stam" id="sk-stam-bar" style="width:0%;"></div>
-                                </div>
-                            </div>
-                            <div class="skill-box">
-                                <div class="skill-head">
-                                    <span>Стабильность комбо</span>
-                                    <span id="sk-cons-val">--%</span>
-                                </div>
-                                <div class="skill-track">
-                                    <div class="skill-fill sf-cons" id="sk-cons-bar" style="width:0%;"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Charts Row -->
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: center;">
-                        <div style="height: 220px;">
-                            <canvas id="hitsChart"></canvas>
-                        </div>
-                        <div style="height: 220px;">
-                            <canvas id="fingersChart"></canvas>
-                        </div>
-                    </div>
+        <!-- ================= TAB 2: RHYTHM TRAINER ================= -->
+        <div id="tab-trainer" class="tab-content">
+            <div class="cyber-card panel-pad">
+                <div class="panel-head">
+                    <div class="panel-title">🎵 Ритм-Тренажёр & Постановка Тайминга</div>
+                    <div class="focus-pill">Лечение Early Tap & Стабилизация UR</div>
                 </div>
 
-                <!-- Feedbacks -->
-                <div class="cyber-card panel-pad">
-                    <div class="panel-head">
-                        <div class="panel-title">🎯 Разбор Тренера: Где кроются ошибки</div>
+                <div class="trainer-container">
+                    <!-- Left: Interactive Hit Arena -->
+                    <div class="hit-arena">
+                        <div class="ripple-ring" id="rippleRing"></div>
+                        <div class="target-circle" id="targetCircle" onclick="registerTap('K1')">
+                            HIT
+                        </div>
+
+                        <!-- Timing Error Bar -->
+                        <div class="timing-bar-container">
+                            <div class="timing-bar">
+                                <div class="zone-100"></div>
+                                <div class="zone-300"></div>
+                                <div class="zone-center"></div>
+                                <div class="timing-needle" id="timingNeedle"></div>
+                            </div>
+                            <div class="timing-labels">
+                                <span>-120ms (Early)</span>
+                                <span>0ms (300 Perfect)</span>
+                                <span>+120ms (Late)</span>
+                            </div>
+                        </div>
+
+                        <div class="hit-feedback-text" id="hitFeedbackText" style="color:var(--neon-cyan);">
+                            Нажми Старт или пробей ритм клавишами Z / X
+                        </div>
+
+                        <div class="key-hints">
+                            <div class="key-badge" id="badgeK1">K1: [ Z ]</div>
+                            <div class="key-badge" id="badgeK2">K2: [ X ]</div>
+                        </div>
                     </div>
-                    <div id="feedbacks-container"></div>
+
+                    <!-- Right: Stats & Controls -->
+                    <div style="display:flex; flex-direction:column; justify-content:space-between;">
+                        <div>
+                            <!-- BPM Controls -->
+                            <div style="background:rgba(0,0,0,0.3); padding:16px; border-radius:14px; border:1px solid rgba(255,255,255,0.06); margin-bottom:16px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                    <span style="font-size:14px; font-weight:700;">Темп метронома:</span>
+                                    <span style="font-family:'JetBrains Mono'; font-size:20px; font-weight:900; color:var(--neon-cyan);" id="bpmVal">165 BPM</span>
+                                </div>
+                                <input type="range" id="bpmSlider" min="120" max="230" value="165" style="width:100%; accent-color:var(--neon-pink); cursor:pointer;" oninput="updateBpm(this.value)">
+                                
+                                <div style="display:flex; gap:6px; margin-top:10px;">
+                                    <button class="filter-btn" onclick="updateBpm(140)">140</button>
+                                    <button class="filter-btn" onclick="updateBpm(160)">160</button>
+                                    <button class="filter-btn" onclick="updateBpm(175)">175</button>
+                                    <button class="filter-btn" onclick="updateBpm(185)">185</button>
+                                    <button class="filter-btn" onclick="updateBpm(200)">200</button>
+                                </div>
+                            </div>
+
+                            <!-- Live Telemetry -->
+                            <div class="metric-tiles" style="grid-template-columns: repeat(2, 1fr); margin-bottom:16px;">
+                                <div class="tile">
+                                    <div class="tile-lbl">Точность (Acc)</div>
+                                    <div class="tile-val" id="trAcc" style="color:var(--neon-green);">100%</div>
+                                </div>
+                                <div class="tile">
+                                    <div class="tile-lbl">Unstable Rate (UR)</div>
+                                    <div class="tile-val" id="trUR" style="color:var(--neon-cyan);">0.0</div>
+                                </div>
+                                <div class="tile">
+                                    <div class="tile-lbl">300 / 100 / 50 / Miss</div>
+                                    <div class="tile-val" style="font-size:17px;" id="trHits">0 / 0 / 0 / 0</div>
+                                </div>
+                                <div class="tile">
+                                    <div class="tile-lbl">Баланс K1 / K2</div>
+                                    <div class="tile-val" style="font-size:17px; color:var(--neon-pink);" id="trFingers">0 / 0 (50%)</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <div style="display:flex; gap:10px;">
+                                <button class="osu-btn" id="startTrainerBtn" style="flex:1; background:var(--neon-green); color:#000;" onclick="toggleTrainer()">
+                                    ▶ Запустить метроном
+                                </button>
+                                <button class="filter-btn" style="padding:10px 16px;" onclick="resetTrainer()">
+                                    ↺ Сброс
+                                </button>
+                            </div>
+                            <button class="osu-btn" style="background:linear-gradient(135deg, rgba(157,0,255,0.8), rgba(255,19,97,0.8));" onclick="saveRhythmToVault()">
+                                💾 Записать разминку в Obsidian Vault
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Right Column -->
-            <div>
-                <!-- Session Selector -->
-                <div class="cyber-card panel-pad">
-                    <div class="panel-head">
-                        <div class="panel-title">🕹️ Игры из lazer</div>
+        <!-- ================= TAB 3: BEATMAP HUB ================= -->
+        <div id="tab-hub" class="tab-content">
+            <div class="cyber-card panel-pad">
+                <div class="panel-head">
+                    <div class="panel-title">🗺️ Каталог проверенных тренировочных карт</div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <input type="text" id="hubSearch" placeholder="Поиск по песне или артисту..." class="osu-select" style="width:240px; padding:6px 12px;" oninput="filterHubMaps()">
                     </div>
-                    <select id="session-select" class="session-select" onchange="loadScore(this.value)">
-                        <option value="">Поиск последних игр...</option>
-                    </select>
-                    <button class="btn-sync-neon" onclick="init()">⚡ Синхронизировать с lazer</button>
                 </div>
 
-                <!-- Verified Map Packs -->
-                <div class="cyber-card panel-pad">
-                    <div class="panel-head">
-                        <div class="panel-title">🗺️ Проверенные Хиты osu!</div>
+                <div class="hub-filters">
+                    <button class="filter-btn active" onclick="setHubCategory('all', this)">Все карты</button>
+                    <button class="filter-btn" onclick="setHubCategory('acc-control-1', this)">🎯 Ритм и Early-Fix (3.9–4.3★)</button>
+                    <button class="filter-btn" onclick="setHubCategory('mouse-aim-jump', this)">🖱️ Аим мыши (4.4–4.7★)</button>
+                    <button class="filter-btn" onclick="setHubCategory('stamina-bursts', this)">⚡ Стамина и берсты (4.5–4.9★)</button>
+                    <button class="filter-btn" onclick="setHubCategory('push-5star', this)">🌟 Штурм 5★ (5.0–5.3★)</button>
+                </div>
+
+                <div class="hub-grid" id="hubGrid"></div>
+            </div>
+        </div>
+
+        <!-- ================= TAB 4: SECOND BRAIN OBSIDIAN ================= -->
+        <div id="tab-vault" class="tab-content">
+            <div class="cyber-card panel-pad">
+                <div class="panel-head">
+                    <div class="panel-title">🧠 Вторая память агента (Obsidian Second Brain)</div>
+                    <div style="display:flex; gap:10px;">
+                        <button class="osu-btn" style="background:var(--neon-purple); font-size:12.5px; padding:8px 14px;" onclick="openVaultExplorer()">
+                            📂 Открыть папку вольта
+                        </button>
                     </div>
-                    <p style="font-size: 13px; color: #94a3b8; margin-bottom: 16px;">
-                        Культовые карты, подобранные нейросетью под твои ошибки:
-                    </p>
-                    <div id="packs-container"></div>
+                </div>
+
+                <div class="vault-split">
+                    <!-- Left Notes List -->
+                    <div class="vault-list" id="vaultNotesList">
+                        <div style="color:#64748b; font-size:13px; text-align:center; padding:20px;">Загрузка заметок...</div>
+                    </div>
+
+                    <!-- Right Note Reader -->
+                    <div class="vault-reader">
+                        <div id="vaultNoteContent" class="markdown-body">
+                            <h2 style="color:var(--neon-cyan);">Выбери заметку слева для просмотра</h2>
+                            <p style="color:#94a3b8;">Здесь отображаются все заметки твоей базы знаний Obsidian: профиль, журнал сессий, гипотезы тренера и гайды по пальцам.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= TAB 5: SETTINGS ================= -->
+        <div id="tab-settings" class="tab-content">
+            <div class="cyber-card panel-pad" style="max-width:800px; margin:0 auto;">
+                <div class="panel-head">
+                    <div class="panel-title">⚙️ Тюнинг и Настройки Тренера</div>
+                </div>
+
+                <div style="display:flex; flex-direction:column; gap:20px;">
+                    <!-- Mouse eDPI Calculator -->
+                    <div style="background:rgba(0,0,0,0.3); padding:18px; border-radius:14px; border:1px solid rgba(255,255,255,0.06);">
+                        <h4 style="font-size:15px; font-weight:800; margin-bottom:12px; color:var(--neon-cyan);">🖱️ Калькулятор чувствительности (eDPI)</h4>
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; align-items:center;">
+                            <div>
+                                <label style="font-size:11px; color:#64748b; font-weight:700;">DPI МЫШИ</label>
+                                <input type="number" id="cfgDpi" value="800" class="osu-select" style="width:100%; margin-top:4px;" oninput="calcEdpi()">
+                            </div>
+                            <div>
+                                <label style="font-size:11px; color:#64748b; font-weight:700;">ЧУВСТВИТЕЛЬНОСТЬ OSU</label>
+                                <input type="number" id="cfgSens" value="1.0" step="0.05" class="osu-select" style="width:100%; margin-top:4px;" oninput="calcEdpi()">
+                            </div>
+                            <div class="stat-box" style="margin-top:14px;">
+                                <div class="sb-val" id="cfgEdpi">800</div>
+                                <div class="sb-lbl">Эффективный eDPI</div>
+                            </div>
+                        </div>
+                        <p style="font-size:12px; color:#94a3b8; margin-top:10px;">
+                            💡 <b>Совет тренера:</b> Для стабильного мышиного аима без дрожания на 5★ рекомендуется диапазон <b>800 – 1200 eDPI</b>. Если eDPI выше 1600 — курсор будет овершутить и мимолетно срываться с кругов.
+                        </p>
+                    </div>
+
+                    <!-- Keyboard binds -->
+                    <div style="background:rgba(0,0,0,0.3); padding:18px; border-radius:14px; border:1px solid rgba(255,255,255,0.06);">
+                        <h4 style="font-size:15px; font-weight:800; margin-bottom:12px; color:var(--neon-pink);">⌨️ Клавиши ритм-тренажера</h4>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                            <div>
+                                <label style="font-size:11px; color:#64748b; font-weight:700;">КНОПКА 1 (K1)</label>
+                                <input type="text" id="cfgKey1" value="Z" maxlength="1" class="osu-select" style="width:100%; margin-top:4px; text-transform:uppercase;" oninput="updateKeyBinds()">
+                            </div>
+                            <div>
+                                <label style="font-size:11px; color:#64748b; font-weight:700;">КНОПКА 2 (K2)</label>
+                                <input type="text" id="cfgKey2" value="X" maxlength="1" class="osu-select" style="width:100%; margin-top:4px; text-transform:uppercase;" oninput="updateKeyBinds()">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Paths check -->
+                    <div style="background:rgba(0,0,0,0.3); padding:18px; border-radius:14px; border:1px solid rgba(255,255,255,0.06);">
+                        <h4 style="font-size:15px; font-weight:800; margin-bottom:10px; color:var(--neon-green);">🔌 Статус подключений</h4>
+                        <div style="font-size:12.5px; color:#cbd5e1; display:flex; flex-direction:column; gap:6px;">
+                            <div>• <b>osu!lazer кэш:</b> <span style="color:var(--neon-green);">Подключен (AppData/Roaming/osu)</span></div>
+                            <div>• <b>Obsidian Vault:</b> <span style="color:var(--neon-green);">Подключен (osu-vault/)</span></div>
+                            <div>• <b>Официальный osu! API v2:</b> <span style="color:var(--neon-green);">Активен (ID 73273)</span></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Interactive Particle Background Canvas Script -->
+    <!-- Toast Feedback -->
+    <div id="toast">
+        <span id="toastIcon">✨</span>
+        <span id="toastMsg">Уведомление</span>
+    </div>
+
     <script>
+        // Particles Canvas Background
         const canvas = document.getElementById('bgCanvas');
         const ctx = canvas.getContext('2d');
         let width = canvas.width = window.innerWidth;
@@ -1022,239 +1568,206 @@ def index():
         });
 
         const particles = [];
-        for (let i = 0; i < 48; i++) {
+        for (let i = 0; i < 35; i++) {
             particles.push({
                 x: Math.random() * width,
                 y: Math.random() * height,
-                vx: (Math.random() - 0.5) * 0.7,
-                vy: (Math.random() - 0.5) * 0.7,
-                radius: Math.random() * 2.5 + 1.2,
-                color: Math.random() > 0.5 ? '#ff1361' : '#00fff2'
+                vx: (Math.random() - 0.5) * 0.4,
+                vy: (Math.random() - 0.5) * 0.4,
+                size: Math.random() * 2 + 1,
+                color: Math.random() > 0.5 ? 'rgba(255, 19, 97, 0.25)' : 'rgba(0, 255, 242, 0.25)'
             });
         }
 
-        let mouse = { x: null, y: null };
-        window.addEventListener('mousemove', (e) => {
-            mouse.x = e.clientX;
-            mouse.y = e.clientY;
-        });
-
-        function animateBg() {
+        function animBg() {
             ctx.clearRect(0, 0, width, height);
-            particles.forEach((p, idx) => {
-                p.x += p.vx;
-                p.y += p.vy;
-
+            particles.forEach(p => {
+                p.x += p.vx; p.y += p.vy;
                 if (p.x < 0) p.x = width;
                 if (p.x > width) p.x = 0;
                 if (p.y < 0) p.y = height;
                 if (p.y > height) p.y = 0;
-
-                if (mouse.x && mouse.y) {
-                    const dx = mouse.x - p.x;
-                    const dy = mouse.y - p.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    if (dist < 130) {
-                        p.x -= dx * 0.025;
-                        p.y -= dy * 0.025;
-                    }
-                }
-
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
                 ctx.fillStyle = p.color;
-                ctx.shadowBlur = 12;
-                ctx.shadowColor = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
                 ctx.fill();
-
-                for (let j = idx + 1; j < particles.length; j++) {
-                    const p2 = particles[j];
-                    const dist = Math.hypot(p.x - p2.x, p.y - p2.y);
-                    if (dist < 150) {
-                        ctx.beginPath();
-                        ctx.moveTo(p.x, p.y);
-                        ctx.lineTo(p2.x, p2.y);
-                        ctx.strokeStyle = `rgba(255, 255, 255, ${0.12 - dist / 1500})`;
-                        ctx.stroke();
-                    }
-                }
             });
-            requestAnimationFrame(animateBg);
+            requestAnimationFrame(animBg);
         }
-        animateBg();
-    </script>
+        animBg();
 
-    <!-- App Logic & Charts -->
-    <script>
+        // Global State
+        let allPacks = [];
+        let allNotes = [];
         let hitsChart = null;
         let fingersChart = null;
+        let currentTab = 'hud';
 
-        async function init() {
-            await loadProfileData();
-            await loadSessionList();
-            const sel = document.getElementById('session-select');
-            if (sel.value) {
-                await loadScore(sel.value);
+        // Toast
+        function showToast(msg, icon = '✨') {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastMsg').innerText = msg;
+            document.getElementById('toastIcon').innerText = icon;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3200);
+        }
+
+        // Tab Switching
+        function switchTab(tabId) {
+            currentTab = tabId;
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+            const targetContent = document.getElementById(`tab-${tabId}`);
+            if (targetContent) targetContent.classList.add('active');
+
+            event?.target?.classList.add('active');
+
+            if (tabId === 'vault' && allNotes.length === 0) {
+                loadVaultNotes();
             }
         }
 
-        async function loadProfileData() {
+        // Initialize Data
+        async function init() {
             try {
-                const res = await fetch('/api/profile');
-                const p = await res.json();
-                if (p && !p.error) {
+                // Profile
+                const resProf = await fetch('/api/profile');
+                const p = await resProf.json();
+                if (!p.error) {
                     document.getElementById('u-name').innerText = p.username;
-                    if (p.avatar_url) document.getElementById('u-avatar').src = p.avatar_url;
-                    document.getElementById('u-rank').innerText = `#${p.global_rank.toLocaleString()}`;
-                    document.getElementById('u-country-rank').innerText = `#${p.country_rank.toLocaleString()}`;
-                    document.getElementById('u-pp').innerText = `${Math.round(p.pp)} pp`;
-                    document.getElementById('u-acc').innerText = `${p.accuracy}%`;
-                    document.getElementById('u-playtime').innerText = `${p.play_time_hours} ч`;
+                    document.getElementById('u-avatar').src = p.avatar_url;
+                    document.getElementById('u-rank').innerText = '#' + (p.global_rank ? p.global_rank.toLocaleString() : '--');
+                    document.getElementById('u-country-rank').innerText = '#' + (p.country_rank ? p.country_rank.toLocaleString() : '--');
+                    document.getElementById('u-pp').innerText = Math.round(p.pp_raw || 0).toLocaleString() + ' pp';
+                    document.getElementById('u-acc').innerText = (p.accuracy || 0).toFixed(2) + '%';
+                    document.getElementById('u-playtime').innerText = Math.round((p.play_time || 0) / 3600) + ' ч';
 
-                    if (p.top_plays && p.top_plays.length > 0) {
+                    if (p.top_plays && p.top_plays.length) {
                         const box = document.getElementById('top-plays-box');
                         box.innerHTML = '';
-                        p.top_plays.slice(0, 3).forEach(tp => {
-                            const a = document.createElement('a');
-                            a.className = 'top-play-card';
-                            a.href = tp.url;
-                            a.target = '_blank';
-                            a.innerHTML = `
-                                <img class="tp-thumb" src="${tp.cover_url}" alt="Cover">
-                                <div class="tp-info">
-                                    <h5>${tp.title}</h5>
-                                    <p>${tp.version} • ${tp.stars}★ • ${tp.acc}%</p>
-                                </div>
-                                <div class="tp-pp">${Math.round(tp.pp)}pp</div>
+                        p.top_plays.forEach(tp => {
+                            box.innerHTML += `
+                                <a href="${tp.beatmap_url}" target="_blank" class="top-play-card">
+                                    <img src="${tp.cover_url}" class="tp-thumb" alt="Cover">
+                                    <div style="overflow:hidden;">
+                                        <div class="tp-title">${tp.title}</div>
+                                        <div class="tp-meta">${tp.version} • ${tp.accuracy}%</div>
+                                    </div>
+                                    <div class="tp-pp">${Math.round(tp.pp)}pp</div>
+                                </a>
                             `;
-                            box.appendChild(a);
                         });
                     }
                 }
-            } catch (e) {
-                console.error(e);
-            }
-        }
 
-        async function loadSessionList() {
-            try {
-                const res = await fetch('/api/replays');
-                const data = await res.json();
-                const sel = document.getElementById('session-select');
-                sel.innerHTML = '';
-                if (data.replays && data.replays.length > 0) {
-                    data.replays.forEach(r => {
-                        const opt = document.createElement('option');
-                        opt.value = r.id;
-                        opt.innerText = `${r.date} • ${r.name}`;
-                        sel.appendChild(opt);
-                    });
-                } else {
-                    sel.innerHTML = '<option value="">Нет сыгранных игр</option>';
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        }
-
-        async function loadScore(id) {
-            try {
-                const url = id ? `/api/analyze?id=${encodeURIComponent(id)}` : '/api/analyze';
-                const res = await fetch(url);
-                const data = await res.json();
-
-                if (data.error) {
-                    alert(data.error);
-                    return;
-                }
-
-                document.getElementById('map-header').innerText = `Игра [${data.time}] • Скор: ${data.score}`;
-                document.getElementById('focus-pill').innerText = `Фокус: ${data.focus_title}`;
-
-                const accEl = document.getElementById('val-acc');
-                accEl.innerText = `${data.accuracy}%`;
-                accEl.className = 'tile-val ' + (data.accuracy >= 95 ? 'acc-green' : data.accuracy >= 90 ? 'acc-yellow' : 'acc-red');
-
-                document.getElementById('val-hits').innerText = `${data.count_300} / ${data.count_100} / ${data.count_50}`;
-                document.getElementById('val-miss').innerText = data.count_miss;
-                document.getElementById('val-combo').innerText = `${data.max_combo}x`;
-
-                setSkill('sk-acc', data.skills.accuracy);
-                setSkill('sk-aim', data.skills.aim);
-                setSkill('sk-stam', data.skills.stamina);
-                setSkill('sk-cons', data.skills.consistency);
-
-                const rVal = data.target_5star_readiness;
-                document.getElementById('gauge-bar').style.width = `${rVal}%`;
-                document.getElementById('gauge-percent').innerText = `${rVal}%`;
-                document.getElementById('potential-pp').innerText = `+${data.potential_pp_gain} pp`;
-                
-                let desc = "";
-                if (rVal < 50) {
-                    desc = "⚠️ Текущий контроль нестабилен для 5★. Рекомендуется FC на картах 3.9★ - 4.2★ с точностью 96%+.";
-                } else if (rVal < 75) {
-                    desc = "⚡ Хорошая база! Ты готов к 4.4★ - 4.7★ джампам. Еще немного контроля над ранними тапами — и 5★ твои!";
-                } else {
-                    desc = "🔥 Высокая готовность! Мышечная память созрела для стабильного прохождения 5★ на 90%+!";
-                }
-                document.getElementById('gauge-desc').innerText = desc;
-
-                const fbContainer = document.getElementById('feedbacks-container');
-                fbContainer.innerHTML = '';
-                data.feedbacks.forEach(fb => {
-                    const el = document.createElement('div');
-                    el.className = `feedback-item fb-${fb.type}`;
-                    el.innerHTML = `
-                        <div class="fb-badge">${fb.badge}</div>
-                        <div class="fb-content">
-                            <h4>${fb.title}</h4>
-                            <p>${fb.text}</p>
-                        </div>
-                    `;
-                    fbContainer.appendChild(el);
+                // Replays list
+                const resR = await fetch('/api/replays');
+                const rData = await resR.json();
+                const dd = document.getElementById('replay-dropdown');
+                dd.innerHTML = '';
+                rData.replays.forEach(r => {
+                    const opt = document.createElement('option');
+                    opt.value = r.id;
+                    opt.innerText = `${r.date} • ${r.name}`;
+                    dd.appendChild(opt);
                 });
 
-                renderPacks(data.recommended_pack.id);
-                renderCharts(data);
+                // Packs
+                const resP = await fetch('/api/packs');
+                const pData = await resP.json();
+                allPacks = pData.packs;
+                renderHubGrid(allPacks);
 
+                // Initial Replay Analysis
+                if (rData.replays.length) {
+                    loadReplay();
+                }
+
+                // Preload vault notes
+                loadVaultNotes();
             } catch (e) {
-                console.error(e);
+                console.error('Init error:', e);
             }
         }
 
-        function setSkill(id, val) {
-            document.getElementById(`${id}-val`).innerText = `${val}%`;
-            document.getElementById(`${id}-bar`).style.width = `${val}%`;
-        }
-
-        async function renderPacks(highlightId) {
-            const res = await fetch('/api/packs');
+        async function loadReplay() {
+            const dd = document.getElementById('replay-dropdown');
+            const targetId = dd.value || '';
+            const res = await fetch(`/api/analyze?id=${encodeURIComponent(targetId)}`);
             const data = await res.json();
-            const container = document.getElementById('packs-container');
+            if (data.error) {
+                showToast(data.error, '⚠️');
+                return;
+            }
+
+            document.getElementById('map-header').innerText = `Игра [${data.time}] • Скор: ${data.score}`;
+            document.getElementById('focus-pill').innerText = data.focus_title;
+
+            document.getElementById('val-acc').innerText = data.accuracy + '%';
+            document.getElementById('val-hits').innerText = `${data.count_300} / ${data.count_100} / ${data.count_50}`;
+            document.getElementById('val-miss').innerText = data.count_miss;
+            document.getElementById('val-combo').innerText = data.max_combo + 'x';
+
+            // Skill Radar Bars
+            document.getElementById('sk-acc-val').innerText = data.skills.accuracy + '%';
+            document.getElementById('sk-acc-bar').style.width = data.skills.accuracy + '%';
+            document.getElementById('sk-aim-val').innerText = data.skills.aim + '%';
+            document.getElementById('sk-aim-bar').style.width = data.skills.aim + '%';
+            document.getElementById('sk-stam-val').innerText = data.skills.stamina + '%';
+            document.getElementById('sk-stam-bar').style.width = data.skills.stamina + '%';
+            document.getElementById('sk-cons-val').innerText = data.skills.consistency + '%';
+            document.getElementById('sk-cons-bar').style.width = data.skills.consistency + '%';
+
+            // 5-Star Readiness Gauge
+            document.getElementById('gauge-bar').style.width = data.target_5star_readiness + '%';
+            document.getElementById('gauge-percent').innerText = data.target_5star_readiness + '%';
+            document.getElementById('potential-pp').innerText = '+' + data.potential_pp_gain + ' pp';
+            document.getElementById('gauge-desc').innerText =
+                `Текущий контроль нестабилен для 5★. Рекомендуется FC на картах 3.9★ – 4.3★ с точностью 96%+.`;
+
+            // Feedbacks
+            const fbBox = document.getElementById('coach-feedbacks');
+            fbBox.innerHTML = '';
+            data.feedbacks.forEach(fb => {
+                fbBox.innerHTML += `
+                    <div class="feedback-card fb-${fb.type}">
+                        <div class="fb-title">
+                            <span class="focus-pill" style="font-size:10px;">${fb.badge}</span>
+                            <span>${fb.title}</span>
+                        </div>
+                        <div class="fb-text">${fb.text}</div>
+                    </div>
+                `;
+            });
+
+            // Recommended Map Pack
+            renderRecommendedPack(data.recommended_pack);
+
+            // Dual Charts
+            renderCharts(data);
+        }
+
+        function renderRecommendedPack(pack) {
+            const container = document.getElementById('recommended-packs');
             container.innerHTML = '';
+            if (!pack) return;
 
-            data.packs.forEach(pack => {
-                const isRec = pack.id === highlightId;
-                const el = document.createElement('div');
-                el.className = `pack-item ${isRec ? 'active-rec' : ''}`;
-                
-                let mapsHtml = '';
-                pack.maps.forEach(m => {
-                    mapsHtml += `
-                        <a href="${m.link}" target="_blank" class="map-dl-link">
-                            <div>
-                                <span style="font-weight:600;">${m.title}</span>
-                                <div style="font-size:11px; color:#94a3b8;">by ${m.mapper}</div>
-                            </div>
-                            <span class="diff-tag">${m.diff}</span>
-                        </a>
-                    `;
-                });
+            let mapsHtml = '';
+            pack.maps.forEach(m => {
+                mapsHtml += `
+                    <a href="${m.link}" target="_blank" class="map-item-link">
+                        <span><b>${m.title}</b> (${m.mapper})</span>
+                        <span style="font-family:'JetBrains Mono'; font-size:11px; color:var(--neon-pink);">${m.diff}</span>
+                    </a>
+                `;
+            });
 
-                el.innerHTML = `
+            container.innerHTML = `
+                <div class="pack-card pack-rec">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <h4 style="font-size:15px; font-weight:800; font-family:'Syne',sans-serif;">${pack.title}</h4>
-                        ${isRec ? '<span class="focus-pill">Тебе сюда!</span>' : ''}
+                        <span class="focus-pill">Тебе сюда!</span>
                     </div>
                     <div class="pack-meta-row">
                         <span class="pill-meta">${pack.stars}</span>
@@ -1262,9 +1775,8 @@ def index():
                     </div>
                     <p style="font-size:12.5px; color:#94a3b8; margin-bottom:8px;">${pack.description}</p>
                     ${mapsHtml}
-                `;
-                container.appendChild(el);
-            });
+                </div>
+            `;
         }
 
         function renderCharts(data) {
@@ -1318,6 +1830,364 @@ def index():
                     }
                 }
             });
+        }
+
+        // ================= TAB 2: RHYTHM TRAINER LOGIC =================
+        let trBpm = 165;
+        let trIsPlaying = false;
+        let trInterval = null;
+        let audioCtx = null;
+        let beatTimes = [];
+        let tapOffsets = [];
+        let tr300 = 0, tr100 = 0, tr50 = 0, trMiss = 0;
+        let trK1 = 0, trK2 = 0;
+        let keyK1 = 'Z';
+        let keyK2 = 'X';
+
+        function playClick(freq = 880) {
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+            } catch (e) {}
+        }
+
+        function updateBpm(val) {
+            trBpm = parseInt(val);
+            document.getElementById('bpmVal').innerText = `${trBpm} BPM`;
+            document.getElementById('bpmSlider').value = trBpm;
+            if (trIsPlaying) {
+                clearInterval(trInterval);
+                startMetronomeLoop();
+            }
+        }
+
+        function toggleTrainer() {
+            trIsPlaying = !trIsPlaying;
+            const btn = document.getElementById('startTrainerBtn');
+            if (trIsPlaying) {
+                btn.innerText = '⏸ Пауза';
+                btn.style.background = 'var(--neon-pink)';
+                btn.style.color = '#fff';
+                startMetronomeLoop();
+            } else {
+                btn.innerText = '▶ Запустить метроном';
+                btn.style.background = 'var(--neon-green)';
+                btn.style.color = '#000';
+                clearInterval(trInterval);
+            }
+        }
+
+        function startMetronomeLoop() {
+            const intervalMs = (60 / trBpm) * 1000;
+            beatTimes = [];
+
+            trInterval = setInterval(() => {
+                const now = performance.now();
+                beatTimes.push(now);
+                if (beatTimes.length > 40) beatTimes.shift();
+
+                playClick(880);
+
+                const circle = document.getElementById('targetCircle');
+                const ring = document.getElementById('rippleRing');
+                circle.classList.add('beat-pulse');
+                ring.classList.remove('animate');
+                void ring.offsetWidth;
+                ring.classList.add('animate');
+
+                setTimeout(() => circle.classList.remove('beat-pulse'), 80);
+            }, intervalMs);
+        }
+
+        function resetTrainer() {
+            tapOffsets = [];
+            tr300 = tr100 = tr50 = trMiss = 0;
+            trK1 = trK2 = 0;
+            updateTrainerTelemetry();
+            document.getElementById('hitFeedbackText').innerText = 'Сброшено. Начни тапать Z/X';
+            document.getElementById('timingNeedle').style.left = '50%';
+        }
+
+        function registerTap(keyName) {
+            const tapTime = performance.now();
+            if (keyName === 'K1') trK1++;
+            else trK2++;
+
+            // Highlight key badge
+            const badge = document.getElementById(keyName === 'K1' ? 'badgeK1' : 'badgeK2');
+            badge.classList.add('pressed');
+            setTimeout(() => badge.classList.remove('pressed'), 90);
+
+            if (beatTimes.length === 0) {
+                updateTrainerTelemetry();
+                return;
+            }
+
+            // Find closest beat
+            let closestDiff = Infinity;
+            for (let b of beatTimes) {
+                const diff = tapTime - b;
+                if (Math.abs(diff) < Math.abs(closestDiff)) {
+                    closestDiff = diff;
+                }
+            }
+
+            // clamp needle visual (-120ms to +120ms => 0% to 100%)
+            const needlePercent = Math.max(0, Math.min(100, 50 + (closestDiff / 240) * 100));
+            document.getElementById('timingNeedle').style.left = needlePercent + '%';
+
+            tapOffsets.push(closestDiff);
+            if (tapOffsets.length > 60) tapOffsets.shift();
+
+            const absDiff = Math.abs(closestDiff);
+            const fbText = document.getElementById('hitFeedbackText');
+
+            if (absDiff <= 22) {
+                tr300++;
+                fbText.innerText = `300 PERFECT (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                fbText.style.color = 'var(--neon-green)';
+            } else if (absDiff <= 65) {
+                tr100++;
+                fbText.innerText = `${closestDiff < 0 ? 'EARLY' : 'LATE'} 100 (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                fbText.style.color = '#f59e0b';
+            } else if (absDiff <= 110) {
+                tr50++;
+                fbText.innerText = `${closestDiff < 0 ? 'TOO EARLY' : 'TOO LATE'} 50 (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                fbText.style.color = '#c084fc';
+            } else {
+                trMiss++;
+                fbText.innerText = `MISS (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                fbText.style.color = 'var(--neon-pink)';
+            }
+
+            updateTrainerTelemetry();
+        }
+
+        function updateTrainerTelemetry() {
+            const totalHits = tr300 + tr100 + tr50 + trMiss;
+            const acc = totalHits > 0 ? ((tr300 * 300 + tr100 * 100 + tr50 * 50) / (totalHits * 300) * 100).toFixed(1) : 100;
+            document.getElementById('trAcc').innerText = acc + '%';
+            document.getElementById('trHits').innerText = `${tr300} / ${tr100} / ${tr50} / ${trMiss}`;
+
+            // Unstable Rate (UR) = stdDev * 10
+            if (tapOffsets.length > 2) {
+                const mean = tapOffsets.reduce((a, b) => a + b, 0) / tapOffsets.length;
+                const variance = tapOffsets.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / tapOffsets.length;
+                const ur = (Math.sqrt(variance) * 10).toFixed(1);
+                document.getElementById('trUR').innerText = ur;
+            } else {
+                document.getElementById('trUR').innerText = '0.0';
+            }
+
+            // Finger ratio
+            const totalTaps = trK1 + trK2;
+            const k1Ratio = totalTaps > 0 ? Math.round((trK1 / totalTaps) * 100) : 50;
+            const k2Ratio = totalTaps > 0 ? 100 - k1Ratio : 50;
+            document.getElementById('trFingers').innerText = `${trK1} / ${trK2} (${k1Ratio}% / ${k2Ratio}%)`;
+        }
+
+        // Global Key Listener for Z / X
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            const key = e.key.toUpperCase();
+            if (key === keyK1) {
+                registerTap('K1');
+            } else if (key === keyK2) {
+                registerTap('K2');
+            }
+        });
+
+        async function saveRhythmToVault() {
+            const totalHits = tr300 + tr100 + tr50 + trMiss;
+            if (totalHits < 10) {
+                showToast('Сделай хотя бы 10 тапов перед сохранением!', '⚠️');
+                return;
+            }
+            const totalTaps = trK1 + trK2;
+            const k1Ratio = totalTaps > 0 ? Math.round((trK1 / totalTaps) * 100) : 50;
+            const k2Ratio = 100 - k1Ratio;
+            const acc = ((tr300 * 300 + tr100 * 100 + tr50 * 50) / (totalHits * 300) * 100).toFixed(1);
+            const ur = document.getElementById('trUR').innerText;
+
+            try {
+                const res = await fetch('/api/vault/save-rhythm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        bpm: trBpm,
+                        taps: totalHits,
+                        acc: parseFloat(acc),
+                        ur: parseFloat(ur),
+                        k1_ratio: k1Ratio,
+                        k2_ratio: k2Ratio
+                    })
+                });
+                const d = await res.json();
+                if (d.status === 'ok') {
+                    showToast('Разминка успешно записана во Вторую Память Obsidian!', '🧠');
+                    loadVaultNotes();
+                } else {
+                    showToast('Ошибка записи в вольт', '⚠️');
+                }
+            } catch (e) {
+                showToast('Ошибка отправки: ' + e, '⚠️');
+            }
+        }
+
+        // ================= TAB 3: BEATMAP HUB LOGIC =================
+        let currentHubCat = 'all';
+
+        function setHubCategory(cat, btn) {
+            currentHubCat = cat;
+            document.querySelectorAll('.hub-filters .filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            filterHubMaps();
+        }
+
+        function filterHubMaps() {
+            const q = document.getElementById('hubSearch').value.toLowerCase();
+            let filteredPacks = allPacks;
+            if (currentHubCat !== 'all') {
+                filteredPacks = allPacks.filter(p => p.id === currentHubCat);
+            }
+
+            let mapList = [];
+            filteredPacks.forEach(p => {
+                p.maps.forEach(m => {
+                    if (!q || m.title.toLowerCase().includes(q) || m.mapper.toLowerCase().includes(q)) {
+                        mapList.push({ ...m, packTitle: p.title, packStars: p.stars, packBpm: p.bpm });
+                    }
+                });
+            });
+
+            renderHubGridCards(mapList);
+        }
+
+        function renderHubGrid(packs) {
+            let mapList = [];
+            packs.forEach(p => {
+                p.maps.forEach(m => {
+                    mapList.push({ ...m, packTitle: p.title, packStars: p.stars, packBpm: p.bpm });
+                });
+            });
+            renderHubGridCards(mapList);
+        }
+
+        function renderHubGridCards(maps) {
+            const grid = document.getElementById('hubGrid');
+            grid.innerHTML = '';
+            if (maps.length === 0) {
+                grid.innerHTML = '<div style="color:#64748b; padding:20px;">Карты не найдены.</div>';
+                return;
+            }
+
+            maps.forEach(m => {
+                grid.innerHTML += `
+                    <div class="hub-card">
+                        <div>
+                            <div class="hub-card-head">
+                                <div class="hub-card-title">${m.title}</div>
+                                <span class="hub-diff-badge">${m.diff}</span>
+                            </div>
+                            <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">Маппер: <b>${m.mapper}</b></div>
+                            <div class="pack-meta-row">
+                                <span class="pill-meta">${m.packBpm}</span>
+                                <span class="pill-meta">${m.packStars}</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:8px; margin-top:12px;">
+                            <a href="${m.link}" target="_blank" class="osu-btn" style="flex:1; text-align:center; text-decoration:none; font-size:12px; padding:8px 12px; background:rgba(0,255,242,0.15); border:1px solid var(--neon-cyan); color:#fff;">
+                                🌐 Открыть карту
+                            </a>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        // ================= TAB 4: OBSIDIAN SECOND BRAIN =================
+        async function loadVaultNotes() {
+            try {
+                const res = await fetch('/api/vault/notes');
+                const data = await res.json();
+                allNotes = data.notes || [];
+
+                const listEl = document.getElementById('vaultNotesList');
+                listEl.innerHTML = '';
+                if (allNotes.length === 0) {
+                    listEl.innerHTML = '<div style="color:#64748b; padding:20px;">Заметки не найдены в osu-vault/</div>';
+                    return;
+                }
+
+                allNotes.forEach((n, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'vault-note-item' + (idx === 0 ? ' active' : '');
+                    item.innerHTML = `
+                        <div class="v-note-title">📄 ${n.filename}</div>
+                        <div class="v-note-mtime">Обновлено: ${n.mtime}</div>
+                    `;
+                    item.onclick = () => selectVaultNote(idx, item);
+                    listEl.appendChild(item);
+                });
+
+                if (allNotes.length > 0) {
+                    renderNoteMarkdown(allNotes[0].content);
+                }
+            } catch (e) {
+                console.error('Vault load error:', e);
+            }
+        }
+
+        function selectVaultNote(index, el) {
+            document.querySelectorAll('.vault-note-item').forEach(i => i.classList.remove('active'));
+            el.classList.add('active');
+            renderNoteMarkdown(allNotes[index].content);
+        }
+
+        function renderNoteMarkdown(content) {
+            const reader = document.getElementById('vaultNoteContent');
+            if (window.marked) {
+                reader.innerHTML = marked.parse(content);
+            } else {
+                reader.innerText = content;
+            }
+        }
+
+        async function openVaultExplorer() {
+            await fetch('/api/vault/open');
+            showToast('Папка osu-vault открыта в Проводнике Windows', '📂');
+        }
+
+        // ================= TAB 5: SETTINGS =================
+        function calcEdpi() {
+            const dpi = parseFloat(document.getElementById('cfgDpi').value) || 800;
+            const sens = parseFloat(document.getElementById('cfgSens').value) || 1.0;
+            const edpi = Math.round(dpi * sens);
+            document.getElementById('cfgEdpi').innerText = edpi;
+        }
+
+        function updateKeyBinds() {
+            const k1 = document.getElementById('cfgKey1').value.toUpperCase() || 'Z';
+            const k2 = document.getElementById('cfgKey2').value.toUpperCase() || 'X';
+            keyK1 = k1;
+            keyK2 = k2;
+            document.getElementById('badgeK1').innerText = `K1: [ ${k1} ]`;
+            document.getElementById('badgeK2').innerText = `K2: [ ${k2} ]`;
+            showToast(`Кнопки ритм-тренажера обновлены: ${k1} и ${k2}`, '⌨️');
         }
 
         window.onload = init;

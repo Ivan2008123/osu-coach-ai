@@ -34,3 +34,37 @@ def sync_score_to_vault(data):
                 print(f"[Vault Sync] Успешно записан новый результат в Obsidian: {score_val}")
     except Exception as e:
         print("[Vault Sync Error]:", e)
+
+def sync_rhythm_session_to_vault(session_data):
+    """
+    Записывает результаты разминки в ритм-тренажере в Obsidian Vault
+    """
+    if not os.path.exists(VAULT_MEMORY_PATH):
+        return False
+    try:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        bpm = session_data.get("bpm", 165)
+        taps = session_data.get("taps", 0)
+        acc = session_data.get("acc", 0)
+        ur = session_data.get("ur", 0)
+        k1_ratio = session_data.get("k1_ratio", 50)
+        k2_ratio = session_data.get("k2_ratio", 50)
+
+        entry = (
+            f"\n- **[{now_str}] Разминка в Ритм-Тренажере**: "
+            f"Темп **{bpm} BPM** | Тапов: {taps} | Точность: **{acc}%** | UR: {ur} | Баланс пальцев: {k1_ratio}% K1 / {k2_ratio}% K2\n"
+        )
+        with open(VAULT_MEMORY_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        target = "## 🎮 Сессионный Журнал (Play Session History)"
+        if target in content:
+            parts = content.split(target, 1)
+            updated = parts[0] + target + "\n" + entry + parts[1]
+            with open(VAULT_MEMORY_PATH, "w", encoding="utf-8") as f:
+                f.write(updated)
+            print(f"[Vault Sync] Успешно сохранена разминка в Obsidian: {bpm} BPM, {acc}% Acc")
+            return True
+    except Exception as e:
+        print("[Vault Sync Rhythm Error]:", e)
+    return False
