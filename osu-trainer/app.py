@@ -1374,8 +1374,8 @@ def index():
                         </div>
 
                         <div class="key-hints">
-                            <div class="key-badge" id="badgeK1">K1: [ Z ]</div>
-                            <div class="key-badge" id="badgeK2">K2: [ X ]</div>
+                            <button class="key-badge" id="badgeK1" style="cursor:pointer;" onclick="registerTap('K1')">K1: [ Z ]</button>
+                            <button class="key-badge" id="badgeK2" style="cursor:pointer;" onclick="registerTap('K2')">K2: [ X ]</button>
                         </div>
                     </div>
 
@@ -1628,7 +1628,11 @@ def index():
             const targetContent = document.getElementById(`tab-${tabId}`);
             if (targetContent) targetContent.classList.add('active');
 
-            event?.target?.classList.add('active');
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes("'" + tabId + "'")) {
+                    btn.classList.add('active');
+                }
+            });
 
             if (tabId === 'vault' && allNotes.length === 0) {
                 loadVaultNotes();
@@ -1886,22 +1890,33 @@ def index():
             trIsPlaying = !trIsPlaying;
             const btn = document.getElementById('startTrainerBtn');
             if (trIsPlaying) {
+                try {
+                    if (!audioCtx) {
+                        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    if (audioCtx.state === 'suspended') {
+                        audioCtx.resume();
+                    }
+                } catch(e) {}
                 btn.innerText = '⏸ Пауза';
                 btn.style.background = 'var(--neon-pink)';
                 btn.style.color = '#fff';
                 startMetronomeLoop();
+                document.getElementById('hitFeedbackText').innerText = 'Слушай бит и тапай в такт!';
+                document.getElementById('hitFeedbackText').style.color = 'var(--neon-cyan)';
             } else {
                 btn.innerText = '▶ Запустить метроном';
                 btn.style.background = 'var(--neon-green)';
                 btn.style.color = '#000';
-                clearInterval(trInterval);
+                if (trInterval) clearInterval(trInterval);
             }
         }
 
         function startMetronomeLoop() {
             const intervalMs = (60 / trBpm) * 1000;
-            beatTimes = [];
+            beatTimes = [performance.now()];
 
+            if (trInterval) clearInterval(trInterval);
             trInterval = setInterval(() => {
                 const now = performance.now();
                 beatTimes.push(now);
@@ -1911,12 +1926,15 @@ def index():
 
                 const circle = document.getElementById('targetCircle');
                 const ring = document.getElementById('rippleRing');
-                circle.classList.add('beat-pulse');
-                ring.classList.remove('animate');
-                void ring.offsetWidth;
-                ring.classList.add('animate');
-
-                setTimeout(() => circle.classList.remove('beat-pulse'), 80);
+                if (circle) {
+                    circle.classList.add('beat-pulse');
+                    setTimeout(() => circle.classList.remove('beat-pulse'), 80);
+                }
+                if (ring) {
+                    ring.classList.remove('animate');
+                    void ring.offsetWidth;
+                    ring.classList.add('animate');
+                }
             }, intervalMs);
         }
 
@@ -1925,59 +1943,75 @@ def index():
             tr300 = tr100 = tr50 = trMiss = 0;
             trK1 = trK2 = 0;
             updateTrainerTelemetry();
-            document.getElementById('hitFeedbackText').innerText = 'Сброшено. Начни тапать Z/X';
+            document.getElementById('hitFeedbackText').innerText = 'Сброшено. Начни тапать Z / X';
+            document.getElementById('hitFeedbackText').style.color = 'var(--neon-cyan)';
             document.getElementById('timingNeedle').style.left = '50%';
         }
 
         function registerTap(keyName) {
+            // Auto-start metronome on tap if stopped
+            if (!trIsPlaying) {
+                toggleTrainer();
+            }
+
             const tapTime = performance.now();
             if (keyName === 'K1') trK1++;
             else trK2++;
 
             // Highlight key badge
             const badge = document.getElementById(keyName === 'K1' ? 'badgeK1' : 'badgeK2');
-            badge.classList.add('pressed');
-            setTimeout(() => badge.classList.remove('pressed'), 90);
+            if (badge) {
+                badge.classList.add('pressed');
+                setTimeout(() => badge.classList.remove('pressed'), 90);
+            }
 
             if (beatTimes.length === 0) {
                 updateTrainerTelemetry();
                 return;
             }
 
-            // Find closest beat
-            let closestDiff = Infinity;
-            for (let b of beatTimes) {
-                const diff = tapTime - b;
-                if (Math.abs(diff) < Math.abs(closestDiff)) {
-                    closestDiff = diff;
-                }
-            }
+            const intervalMs = (60 / trBpm) * 1000;
+            const lastBeat = beatTimes[beatTimes.length - 1];
+            const nextBeat = lastBeat + intervalMs;
 
-            // clamp needle visual (-120ms to +120ms => 0% to 100%)
+            // Difference from last beat (late -> positive)
+            const diffFromLast = tapTime - lastBeat;
+            // Difference from next beat (early -> negative)
+            const diffFromNext = tapTime - nextBeat;
+
+            // Pick closest in time
+            const closestDiff = Math.abs(diffFromLast) <= Math.abs(diffFromNext) ? diffFromLast : diffFromNext;
+
+            // Visual needle: -120ms to +120ms
             const needlePercent = Math.max(0, Math.min(100, 50 + (closestDiff / 240) * 100));
-            document.getElementById('timingNeedle').style.left = needlePercent + '%';
+            const needle = document.getElementById('timingNeedle');
+            if (needle) needle.style.left = needlePercent + '%';
 
             tapOffsets.push(closestDiff);
-            if (tapOffsets.length > 60) tapOffsets.shift();
+            if (tapOffsets.length > 50) tapOffsets.shift();
 
             const absDiff = Math.abs(closestDiff);
             const fbText = document.getElementById('hitFeedbackText');
+            const sign = closestDiff > 0 ? '+' : '';
+            const roundedMs = Math.round(closestDiff);
 
-            if (absDiff <= 22) {
+            if (absDiff <= 25) {
                 tr300++;
-                fbText.innerText = `300 PERFECT (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                fbText.innerText = `300 PERFECT (${sign}${roundedMs}ms)`;
                 fbText.style.color = 'var(--neon-green)';
-            } else if (absDiff <= 65) {
+            } else if (absDiff <= 70) {
                 tr100++;
-                fbText.innerText = `${closestDiff < 0 ? 'EARLY' : 'LATE'} 100 (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                const label = closestDiff < 0 ? 'EARLY' : 'LATE';
+                fbText.innerText = `${label} 100 (${sign}${roundedMs}ms)`;
                 fbText.style.color = '#f59e0b';
-            } else if (absDiff <= 110) {
+            } else if (absDiff <= 115) {
                 tr50++;
-                fbText.innerText = `${closestDiff < 0 ? 'TOO EARLY' : 'TOO LATE'} 50 (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                const label = closestDiff < 0 ? 'TOO EARLY' : 'TOO LATE';
+                fbText.innerText = `${label} 50 (${sign}${roundedMs}ms)`;
                 fbText.style.color = '#c084fc';
             } else {
                 trMiss++;
-                fbText.innerText = `MISS (${closestDiff > 0 ? '+' : ''}${Math.round(closestDiff)}ms)`;
+                fbText.innerText = `MISS (${sign}${roundedMs}ms)`;
                 fbText.style.color = 'var(--neon-pink)';
             }
 
@@ -2007,13 +2041,26 @@ def index():
             document.getElementById('trFingers').innerText = `${trK1} / ${trK2} (${k1Ratio}% / ${k2Ratio}%)`;
         }
 
-        // Global Key Listener for Z / X
+        // Global Key Listener for Z / X (Layout-Independent: RU / EN)
         window.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT') return;
-            const key = e.key.toUpperCase();
-            if (key === keyK1) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+            const code = e.code;
+            const key = e.key ? e.key.toUpperCase() : '';
+
+            // Match K1: KeyZ, 'Z', or Russian 'Я'
+            const isK1 = (code === 'Key' + keyK1) || (key === keyK1) || 
+                         (keyK1 === 'Z' && (code === 'KeyZ' || key === 'Я' || e.key === 'я'));
+
+            // Match K2: KeyX, 'X', or Russian 'Ч'
+            const isK2 = (code === 'Key' + keyK2) || (key === keyK2) || 
+                         (keyK2 === 'X' && (code === 'KeyX' || key === 'Ч' || e.key === 'ч'));
+
+            if (isK1) {
+                e.preventDefault();
                 registerTap('K1');
-            } else if (key === keyK2) {
+            } else if (isK2) {
+                e.preventDefault();
                 registerTap('K2');
             }
         });
