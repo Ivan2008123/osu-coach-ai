@@ -53,13 +53,13 @@ CURATED_MAP_PACKS = [
         ]
     },
     {
-        "id": "mouse-aim-jump",
+        "id": "tablet-aim-jump",
         "title": "Легендарный Джамп-Аим (Snap & Micro-Aim)",
         "stars": "4.4★ – 4.7★",
         "bpm": "175 - 190 BPM",
-        "focus": "Mouse precision / Snap jumping",
-        "badge": "Аим мыши",
-        "description": "Карты для постановки мышиного аима. Четкий угол и понятные джампы без мусорных слайдеров.",
+        "focus": "Tablet precision / Snap jumping",
+        "badge": "Аим пера (ГП)",
+        "description": "Карты для постановки четкого аима пером на планшете. Четкий угол, фиксация курсора (Snap) и понятные джампы без мусорных слайдеров.",
         "maps": [
             {
                 "title": "Black Rover (TV Size)",
@@ -265,7 +265,7 @@ def analyze_replay(file_path):
         focus_title = "Прокачка второго пальца (Стамина & Альтернейт)"
     elif replay.count_miss > 4:
         recommended_pack = CURATED_MAP_PACKS[1]
-        focus_title = "Точность довода мыши (Mouse Snap Aim)"
+        focus_title = "Точность довода пера (Tablet Snap Aim)"
     else:
         recommended_pack = CURATED_MAP_PACKS[3]
         focus_title = "Штурм 5★ рубежа (Push 5 Stars)"
@@ -305,15 +305,15 @@ def analyze_replay(file_path):
         coach_feedbacks.append({
             "badge": "Аим",
             "type": "success",
-            "title": "Идеальный контроль курсора (0 Miss)",
-            "text": "Ты ни разу не промахнулся мимо ноты. Мышь останавливается в нужных координатах без дрожания."
+            "title": "Идеальный контроль пера на ГП (0 Miss)",
+            "text": "Перо стабильно фиксируется в центре нот без дрожания и срывов. Мышечная память на текущей области планшета работает чисто."
         })
     else:
         coach_feedbacks.append({
             "badge": "Аим",
             "type": "danger",
             "title": f"{replay.count_miss} промахов на карте",
-            "text": "Промахи вызваны недоводом курсора (under-aim) на переходе между паттернами. Попробуй чуть-чуть снизить чувствительность мыши или играть более плавными движениями."
+            "text": "Промахи вызваны недоводом пера (under-aim) на размашистых углах. В OpenTabletDriver (OTD) проверь активную область: если она шире 85-90 мм, пальцы могут не дотягиваться до дальних нот без смещения кисти. Также проверь стиль: Drag (ведение по доске) дает стабильный упор трением, а для Hover рекомендуется фильтр сглаживания (Devocub / Reconstructor)."
         })
 
     res = {
@@ -1270,7 +1270,7 @@ def index():
                                 </div>
                                 <div class="skill-box">
                                     <div class="skill-head">
-                                        <span>Аим мыши (Snap & Precision)</span>
+                                        <span>Аим пера (ГП • Snap & Precision)</span>
                                         <span id="sk-aim-val">--%</span>
                                     </div>
                                     <div class="skill-track"><div class="skill-fill sf-aim" id="sk-aim-bar" style="width:0%;"></div></div>
@@ -1452,7 +1452,7 @@ def index():
                 <div class="hub-filters">
                     <button class="filter-btn active" onclick="setHubCategory('all', this)">Все карты</button>
                     <button class="filter-btn" onclick="setHubCategory('acc-control-1', this)">🎯 Ритм и Early-Fix (3.9–4.3★)</button>
-                    <button class="filter-btn" onclick="setHubCategory('mouse-aim-jump', this)">🖱️ Аим мыши (4.4–4.7★)</button>
+                    <button class="filter-btn" onclick="setHubCategory('tablet-aim-jump', this)">🖊️ Аим пера (ГП 4.4–4.7★)</button>
                     <button class="filter-btn" onclick="setHubCategory('stamina-bursts', this)">⚡ Стамина и берсты (4.5–4.9★)</button>
                     <button class="filter-btn" onclick="setHubCategory('push-5star', this)">🌟 Штурм 5★ (5.0–5.3★)</button>
                 </div>
@@ -1498,25 +1498,32 @@ def index():
                 </div>
 
                 <div style="display:flex; flex-direction:column; gap:20px;">
-                    <!-- Mouse eDPI Calculator -->
+                    <!-- Tablet Area Calculator -->
                     <div style="background:rgba(0,0,0,0.3); padding:18px; border-radius:14px; border:1px solid rgba(255,255,255,0.06);">
-                        <h4 style="font-size:15px; font-weight:800; margin-bottom:12px; color:var(--neon-cyan);">🖱️ Калькулятор чувствительности (eDPI)</h4>
-                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; align-items:center;">
+                        <h4 style="font-size:15px; font-weight:800; margin-bottom:12px; color:var(--neon-cyan);">🖊️ Тюнинг Графического Планшета (OTD & Tablet Area)</h4>
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1.2fr; gap:14px; align-items:center;">
                             <div>
-                                <label style="font-size:11px; color:#64748b; font-weight:700;">DPI МЫШИ</label>
-                                <input type="number" id="cfgDpi" value="800" class="osu-select" style="width:100%; margin-top:4px;" oninput="calcEdpi()">
+                                <label style="font-size:11px; color:#64748b; font-weight:700;">ШИРИНА (WIDTH мм)</label>
+                                <input type="number" id="cfgAreaW" value="78" step="0.5" class="osu-select" style="width:100%; margin-top:4px;" oninput="calcTabletArea()">
                             </div>
                             <div>
-                                <label style="font-size:11px; color:#64748b; font-weight:700;">ЧУВСТВИТЕЛЬНОСТЬ OSU</label>
-                                <input type="number" id="cfgSens" value="1.0" step="0.05" class="osu-select" style="width:100%; margin-top:4px;" oninput="calcEdpi()">
+                                <label style="font-size:11px; color:#64748b; font-weight:700;">ВЫСОТА (HEIGHT мм)</label>
+                                <input type="number" id="cfgAreaH" value="43.88" step="0.5" class="osu-select" style="width:100%; margin-top:4px;" oninput="calcTabletArea()">
                             </div>
                             <div class="stat-box" style="margin-top:14px;">
-                                <div class="sb-val" id="cfgEdpi">800</div>
-                                <div class="sb-lbl">Эффективный eDPI</div>
+                                <div class="sb-val" style="font-size:18px; color:var(--neon-green);" id="cfgAreaRatio">16:9 (1.78 ✓)</div>
+                                <div class="sb-lbl" id="cfgAreaDiag">Диагональ: ~89 мм</div>
                             </div>
                         </div>
-                        <p style="font-size:12px; color:#94a3b8; margin-top:10px;">
-                            💡 <b>Совет тренера:</b> Для стабильного мышиного аима без дрожания на 5★ рекомендуется диапазон <b>800 – 1200 eDPI</b>. Если eDPI выше 1600 — курсор будет овершутить и мимолетно срываться с кругов.
+                        <div style="margin-top:12px; display:flex; gap:14px; align-items:center;">
+                            <label style="font-size:11px; color:#64748b; font-weight:700;">СТИЛЬ ИГРЫ:</label>
+                            <select id="cfgGripStyle" class="osu-select" style="padding:6px 12px; width:auto;" onchange="calcTabletArea()">
+                                <option value="drag">Drag (ведение пера по поверхности с трением)</option>
+                                <option value="hover">Hover (зависание пера над планшетом)</option>
+                            </select>
+                        </div>
+                        <p style="font-size:12px; color:#94a3b8; margin-top:12px; line-height:1.5;" id="cfgTabletAdvice">
+                            💡 <b>Совет тренера по ГП:</b> Пропорция 16:9 идеальна — курсор двигается равномерно по X и Y. Для карт 5★ со взрывными джампами рекомендуется ширина <b>72 – 85 мм</b>. При стиле <b>Drag</b> трение дает максимальный контроль и естественный упор при Snap-остановке.
                         </p>
                     </div>
 
@@ -2173,11 +2180,42 @@ def index():
         }
 
         // ================= TAB 5: SETTINGS =================
-        function calcEdpi() {
-            const dpi = parseFloat(document.getElementById('cfgDpi').value) || 800;
-            const sens = parseFloat(document.getElementById('cfgSens').value) || 1.0;
-            const edpi = Math.round(dpi * sens);
-            document.getElementById('cfgEdpi').innerText = edpi;
+        function calcTabletArea() {
+            const w = parseFloat(document.getElementById('cfgAreaW').value) || 78;
+            const h = parseFloat(document.getElementById('cfgAreaH').value) || 43.88;
+            const style = document.getElementById('cfgGripStyle').value;
+            const ratio = (w / (h || 1)).toFixed(2);
+            const diag = Math.round(Math.sqrt(w*w + h*h));
+
+            const is169 = Math.abs(ratio - 1.78) < 0.05;
+            const ratioEl = document.getElementById('cfgAreaRatio');
+            ratioEl.innerText = is169 ? `${ratio} (16:9 ✓)` : `${ratio} (Не 16:9)`;
+            ratioEl.style.color = is169 ? 'var(--neon-green)' : '#f59e0b';
+            document.getElementById('cfgAreaDiag').innerText = `Диагональ: ~${diag} мм`;
+
+            const adviceEl = document.getElementById('cfgTabletAdvice');
+            let text = '';
+            if (!is169) {
+                text += '⚠️ <b>Внимание:</b> Соотношение не 16:9! Горизонтальная и вертикальная скорость различаются, что ломает мышечную память на углах. В OpenTabletDriver включи <b>Lock Aspect Ratio</b>. ';
+            } else {
+                text += '✓ <b>Пропорция идеальна (16:9):</b> Движение пера строго согласовано с экраном. ';
+            }
+
+            if (w < 65) {
+                text += 'Область довольно мала (<65 мм) — возможен тремор пера на мелких кругах 5★. ';
+            } else if (w > 92) {
+                text += 'Область широкая (>92 мм) — пальцам трудно дотягиваться до дальних углов, возможен under-aim. ';
+            } else {
+                text += `Ширина ${w} мм — золотой баланс скорости и точности для 4-5★. `;
+            }
+
+            if (style === 'hover') {
+                text += 'Для стиля <b>Hover</b> обязательно подключи фильтр <i>Devocub</i> или <i>Reconstructor</i> в OTD, чтобы гасить дрожание пера в воздухе.';
+            } else {
+                text += 'При стиле <b>Drag</b> естественное трение помогает резко стопать перо (Snap) прямо на ноте.';
+            }
+
+            adviceEl.innerHTML = `💡 <b>Совет тренера по ГП:</b> ${text}`;
         }
 
         function updateKeyBinds() {
