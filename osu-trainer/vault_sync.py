@@ -35,6 +35,42 @@ def sync_score_to_vault(data):
     except Exception as e:
         print("[Vault Sync Error]:", e)
 
+def sync_session_summary_to_vault(summary):
+    """
+    Записывает агрегированную сводку сессии в Obsidian Vault
+    """
+    if not os.path.exists(VAULT_MEMORY_PATH):
+        return False
+    try:
+        games_count = summary.get("games_count", 0)
+        avg_acc = summary.get("avg_acc", 0)
+        best_score = summary.get("best_score", "0")
+        total_300 = summary.get("total_300", 0)
+        total_100 = summary.get("total_100", 0)
+        total_50 = summary.get("total_50", 0)
+        total_miss = summary.get("total_miss", 0)
+        ratio_100 = summary.get("ratio_100", 0)
+        time_span = summary.get("session_time_span", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+        row_id = f"Сессия ({games_count} игр): Скор {best_score}"
+        new_row = f"| **{time_span}** | {row_id} | **{avg_acc}%** | {total_300} / {total_100} / {total_50} / {total_miss} | Сводка: {ratio_100}% ранних нажатий (Early Tap) |\n"
+
+        with open(VAULT_MEMORY_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if row_id not in content:
+            target_marker = "| :--- | :--- | :--- | :--- | :--- |\n"
+            if target_marker in content:
+                parts = content.split(target_marker, 1)
+                updated_content = parts[0] + target_marker + new_row + parts[1]
+                with open(VAULT_MEMORY_PATH, "w", encoding="utf-8") as f:
+                    f.write(updated_content)
+                print(f"[Vault Sync] Успешно записана сводка сессии в Obsidian: {avg_acc}% Acc")
+                return True
+    except Exception as e:
+        print("[Vault Sync Session Error]:", e)
+    return False
+
 def sync_rhythm_session_to_vault(session_data):
     """
     Записывает результаты разминки в ритм-тренажере в Obsidian Vault

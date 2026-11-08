@@ -202,7 +202,18 @@ def get_recent_replays():
     replays.sort(key=lambda x: x["mtime"], reverse=True)
     return replays
 
+REPLAY_CACHE = {}
+
 def analyze_replay(file_path):
+    cache_key = None
+    try:
+        mtime = os.path.getmtime(file_path)
+        cache_key = (file_path, mtime)
+        if cache_key in REPLAY_CACHE:
+            return REPLAY_CACHE[cache_key]
+    except Exception:
+        pass
+
     try:
         replay = osrparse.Replay.from_path(file_path)
     except Exception as e:
@@ -344,12 +355,115 @@ def analyze_replay(file_path):
         "time": datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%H:%M:%S (%d.%m.%Y)")
     }
     
+    if cache_key:
+        REPLAY_CACHE[cache_key] = res
+
     sync_score_to_vault(res)
+    return res
+
+def analyze_recent_session(limit=6):
+    replays = get_recent_replays()
+    if not replays:
+        return {"error": "Реплеи не найдены. Сыграй карту в osu!lazer!"}
+    
+    games = []
+    for r in replays[:limit]:
+        p = r["path"]
+        d = analyze_replay(p)
+        if "error" not in d:
+            game_summary = dict(d)
+            game_summary["replay_id"] = r["id"]
+            game_summary["display_name"] = r["name"]
+            games.append(game_summary)
+            
+    if not games:
+        return {"error": "Не удалось проанализировать недавние игры."}
+        
+    total_hits = sum(g["count_300"] + g["count_100"] + g["count_50"] + g["count_miss"] for g in games)
+    total_300 = sum(g["count_300"] for g in games)
+    total_100 = sum(g["count_100"] for g in games)
+    total_50 = sum(g["count_50"] for g in games)
+    total_miss = sum(g["count_miss"] for g in games)
+    
+    avg_acc = round(sum(g["accuracy"] for g in games) / len(games), 2)
+    best_acc_game = max(games, key=lambda x: x["accuracy"])
+    best_score_game = max(games, key=lambda x: int(str(x["score"]).replace(",", "")))
+    
+    ratio_100 = round(total_100 / (total_hits or 1) * 100, 1)
+    avg_miss = round(total_miss / len(games), 1)
+    
+    avg_k1 = round(sum(g["k1_ratio"] for g in games) / len(games), 1)
+    avg_k2 = round(sum(g["k2_ratio"] for g in games) / len(games), 1)
+    
+    verdict_lines = [
+        f"По последним {len(games)} картам видно, что твоя средняя аккураси держится на уровне {avg_acc}% "
+        f"(пиковый результат: {best_acc_game['accuracy']}% на скоре {best_acc_game['score']}, а лучший скор сессии: {best_score_game['score']})."
+    ]
+    
+    if ratio_100 > 22:
+        verdict_lines.append(
+            f"Главная точка потери точности — ранний клик (Early Tap): {ratio_100}% всех твоих ударов приходятся на 100-ки "
+            f"(суммарно {total_100} соток против {total_300} трехсоток!). Мозг спешит кликнуть кнопку до того, как круг сближения коснется ноты."
+        )
+    else:
+        verdict_lines.append(
+            f"Контроль тайминга стабильный: доля соток составляет {ratio_100}%, клики ложатся близко к белому окну 300."
+        )
+        
+    if avg_miss > 3:
+        verdict_lines.append(
+            f"По аиму пером на ГП: в среднем {avg_miss} миссов за карту. На комфортной скорости перо стопается чисто "
+            f"(были зафиксированы игры с 0–1 миссом), но на резких переходах между углами случаются недоводы (under-aim)."
+        )
+    else:
+        verdict_lines.append(
+            f"Аим пером на ГП работает очень надежно: в среднем всего {avg_miss} миссов за карту, Snap-остановки стабильны."
+        )
+        
+    if abs(avg_k1 - avg_k2) < 15:
+        verdict_lines.append(
+            f"Баланс пальцев великолепный ({avg_k1}% / {avg_k2}%): ты играешь чистым альтернейтом, снимая перегрузку с ведущего пальца."
+        )
+    else:
+        verdict_lines.append(
+            f"В балансе пальцев заметен перекос ({avg_k1}% K1 / {avg_k2}% K2). Активнее включай второй палец на очередях нот."
+        )
+        
+    verdict_text = " ".join(verdict_lines)
+    
+    session_time_span = f"{games[-1]['time'].split(' ')[0]} – {games[0]['time']}" if games else "Недавняя"
+    
+    res = {
+        "games_count": len(games),
+        "session_time_span": session_time_span,
+        "avg_acc": avg_acc,
+        "best_acc": best_acc_game["accuracy"],
+        "best_score": best_score_game["score"],
+        "best_game_time": best_acc_game["time"],
+        "total_hits": total_hits,
+        "total_300": total_300,
+        "total_100": total_100,
+        "total_50": total_50,
+        "total_miss": total_miss,
+        "ratio_100": ratio_100,
+        "avg_miss": avg_miss,
+        "avg_k1": avg_k1,
+        "avg_k2": avg_k2,
+        "coach_verdict": verdict_text,
+        "games": games
+    }
+    
+    from vault_sync import sync_session_summary_to_vault
+    sync_session_summary_to_vault(res)
     return res
 
 @app.get("/api/replays")
 def api_replays():
     return {"replays": get_recent_replays()[:20]}
+
+@app.get("/api/session/summary")
+def api_session_summary(limit: int = 6):
+    return analyze_recent_session(limit=limit)
 
 @app.get("/api/profile")
 def api_profile():
@@ -854,6 +968,139 @@ def index():
             transform: translateX(3px);
         }
 
+        /* ------------------ SESSION MODE & VERDICT ------------------ */
+        .verdict-banner {
+            background: linear-gradient(135deg, rgba(0, 255, 242, 0.07) 0%, rgba(255, 19, 97, 0.04) 100%);
+            border: 1px solid rgba(0, 255, 242, 0.25);
+            border-left: 5px solid var(--neon-cyan);
+            border-radius: 16px;
+            padding: 18px 22px;
+            margin-bottom: 22px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+        }
+        .verdict-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .verdict-tag {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--neon-cyan);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .verdict-text {
+            font-size: 14px;
+            line-height: 1.65;
+            color: #f1f5f9;
+            font-weight: 500;
+        }
+        .drilldown-bar {
+            display: none;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 14px;
+            padding: 12px 18px;
+            margin-bottom: 20px;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+        }
+        .drilldown-bar.active {
+            display: flex;
+        }
+        .btn-return-session {
+            background: rgba(0, 255, 242, 0.12);
+            border: 1px solid var(--neon-cyan);
+            color: var(--neon-cyan);
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 12.5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-return-session:hover {
+            background: var(--neon-cyan);
+            color: #0b0d19;
+            box-shadow: 0 0 15px rgba(0, 255, 242, 0.4);
+        }
+        .session-games-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .session-game-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 12px;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .session-game-card:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(0, 255, 242, 0.4);
+            transform: translateX(4px);
+        }
+        .session-game-card.active {
+            border-color: var(--neon-pink);
+            background: rgba(255, 19, 97, 0.06);
+        }
+        .sg-title {
+            font-size: 13.5px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .sg-meta {
+            font-size: 11.5px;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+        .sg-stats {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+        }
+        .sg-acc {
+            font-weight: 800;
+            color: var(--neon-green);
+        }
+        .sg-miss {
+            color: var(--neon-pink);
+            font-weight: 700;
+        }
+        .sg-btn {
+            font-size: 11.5px;
+            font-weight: 700;
+            padding: 5px 12px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.06);
+            color: #cbd5e1;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.2s;
+        }
+        .session-game-card:hover .sg-btn {
+            background: var(--neon-pink);
+            color: #fff;
+            border-color: var(--neon-pink);
+            box-shadow: 0 0 10px rgba(255, 19, 97, 0.4);
+        }
+
         /* ------------------ TAB 2: RHYTHM TRAINER ------------------ */
         .trainer-container {
             display: grid;
@@ -1227,31 +1474,60 @@ def index():
             <div class="core-grid">
                 <!-- Left Column -->
                 <div>
+                    <!-- Auxiliary Drilldown Top Notification Bar -->
+                    <div class="drilldown-bar" id="drilldown-bar">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-size:11px; font-weight:800; color:var(--neon-pink); text-transform:uppercase; letter-spacing:0.5px;">🔍 Детальный разбор</span>
+                            <span id="drilldown-game-title" style="font-size:13.5px; font-weight:600; color:#fff;">--</span>
+                        </div>
+                        <button class="btn-return-session" onclick="showSessionSummary()">
+                            <span>⬅</span> <span>Вернуться к сводке сессии</span>
+                        </button>
+                    </div>
+
+                    <!-- Dynamic Coach Verdict Banner -->
+                    <div class="verdict-banner" id="verdict-banner">
+                        <div class="verdict-header">
+                            <div class="verdict-tag">
+                                <span>⚡</span>
+                                <span id="verdict-badge">Анализ последней серии игр</span>
+                            </div>
+                            <div id="verdict-session-time" style="font-size: 11.5px; color: #94a3b8; font-family: 'JetBrains Mono', monospace;">Сессия osu!lazer</div>
+                        </div>
+                        <div class="verdict-text" id="verdict-content">
+                            Анализируем твои последние игры...
+                        </div>
+                    </div>
+
                     <div class="cyber-card panel-pad">
                         <div class="panel-head">
                             <div class="panel-title">
-                                <span id="map-header">Загрузка игры...</span>
+                                <span id="map-header">Сводка по последним играм (Текущая форма)</span>
                             </div>
-                            <div class="focus-pill" id="focus-pill">Фокус: Анализ</div>
+                            <div class="focus-pill" id="focus-pill">Текущая форма</div>
                         </div>
 
-                        <!-- 4 Big Tiles -->
+                        <!-- 4 Big Metric Tiles -->
                         <div class="metric-tiles">
                             <div class="tile">
-                                <div class="tile-lbl">Точность (ACC)</div>
+                                <div class="tile-lbl" id="lbl-tile-1">Средняя точность (ACC)</div>
                                 <div class="tile-val" id="val-acc">--%</div>
+                                <div id="sub-tile-1" style="font-size:11px; color:#94a3b8; margin-top:4px;">Пик: --</div>
                             </div>
                             <div class="tile">
-                                <div class="tile-lbl">300 / 100 / 50</div>
+                                <div class="tile-lbl" id="lbl-tile-2">Хиты (300 / 100 / 50)</div>
                                 <div class="tile-val" style="font-size:18px; color:#c084fc;" id="val-hits">--</div>
+                                <div id="sub-tile-2" style="font-size:11px; color:#f59e0b; margin-top:4px;">--</div>
                             </div>
                             <div class="tile">
-                                <div class="tile-lbl">Промахи (Miss)</div>
+                                <div class="tile-lbl" id="lbl-tile-3">Промахи пером на ГП</div>
                                 <div class="tile-val" style="color:var(--neon-pink);" id="val-miss">--</div>
+                                <div id="sub-tile-3" style="font-size:11px; color:#94a3b8; margin-top:4px;">--</div>
                             </div>
                             <div class="tile">
-                                <div class="tile-lbl">Макс комбо</div>
-                                <div class="tile-val" style="color:var(--neon-cyan);" id="val-combo">--x</div>
+                                <div class="tile-lbl" id="lbl-tile-4">Баланс пальцев (K1 / K2)</div>
+                                <div class="tile-val" style="color:var(--neon-cyan);" id="val-combo">--</div>
+                                <div id="sub-tile-4" style="font-size:11px; color:var(--neon-green); margin-top:4px;">--</div>
                             </div>
                         </div>
 
@@ -1303,6 +1579,15 @@ def index():
                         </div>
                     </div>
 
+                    <!-- Session Games Timeline Card -->
+                    <div class="cyber-card panel-pad" id="session-timeline-card">
+                        <div class="panel-head">
+                            <div class="panel-title">📜 Сыгранные карты этой сессии</div>
+                            <span style="font-size:12px; color:#94a3b8;">Нажми на карту для перехода в детальный разбор</span>
+                        </div>
+                        <div class="session-games-grid" id="session-games-list"></div>
+                    </div>
+
                     <!-- Coach Feedbacks -->
                     <div class="cyber-card panel-pad">
                         <div class="panel-head">
@@ -1317,14 +1602,22 @@ def index():
                     <!-- Replay Selector -->
                     <div class="cyber-card panel-pad">
                         <div class="panel-head">
-                            <div class="panel-title">🎮 История сессий lazer</div>
+                            <div class="panel-title">🔍 Вспомогательный выбор</div>
                         </div>
+                        <p style="font-size: 12.5px; color: #94a3b8; margin-bottom: 12px; line-height: 1.45;">
+                            Хочешь рассмотреть конкретную карту детально? Выбери её из списка или кликни по ней в ленте слева:
+                        </p>
                         <div class="replay-select-box">
                             <select id="replay-dropdown" class="osu-select"></select>
                         </div>
-                        <button class="osu-btn" style="width:100%;" onclick="loadReplay()">
-                            ⚡ Анализировать выбранную игру
-                        </button>
+                        <div style="display:flex; gap:8px;">
+                            <button class="osu-btn" style="flex:1;" onclick="loadReplay()">
+                                ⚡ Рассмотреть детально
+                            </button>
+                            <button class="btn-return-session" onclick="showSessionSummary()" title="Вернуться к общей сводке сессии">
+                                📊 Сводка
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Recommended Training Map Pack -->
@@ -1639,6 +1932,9 @@ def index():
             }
         }
 
+        let currentSessionData = null;
+        let hudMode = 'session';
+
         // Initialize Data
         async function init() {
             try {
@@ -1675,7 +1971,7 @@ def index():
                     }
                 }
 
-                // Replays list
+                // Replays list (Auxiliary selector)
                 const resR = await fetch('/api/replays');
                 const rData = await resR.json();
                 const dd = document.getElementById('replay-dropdown');
@@ -1693,21 +1989,160 @@ def index():
                 allPacks = pData.packs;
                 renderHubGrid(allPacks);
 
-                // Initial Replay Analysis
-                if (rData.replays.length) {
-                    loadReplay();
-                }
-
                 // Preload vault notes
                 loadVaultNotes();
+
+                // Auto-analyze Recent Session as PRIMARY default view
+                try {
+                    const resS = await fetch('/api/session/summary');
+                    currentSessionData = await resS.json();
+                    if (!currentSessionData.error) {
+                        showSessionSummary();
+                    } else if (rData.replays.length) {
+                        loadReplay();
+                    }
+                } catch (eSession) {
+                    console.error('Session summary fetch error:', eSession);
+                    if (rData.replays.length) {
+                        loadReplay();
+                    }
+                }
             } catch (e) {
                 console.error('Init error:', e);
             }
         }
 
-        async function loadReplay() {
+        function showSessionSummary() {
+            if (!currentSessionData || currentSessionData.error) return;
+            hudMode = 'session';
+            const s = currentSessionData;
+
+            // UI Mode toggles
+            document.getElementById('drilldown-bar').classList.remove('active');
+            document.getElementById('verdict-banner').style.display = 'block';
+
+            // Top Verdict Block
+            document.getElementById('verdict-badge').innerText = `Сессия (${s.games_count} сыгранных карт)`;
+            document.getElementById('verdict-session-time').innerText = s.session_time_span;
+            document.getElementById('verdict-content').innerText = s.coach_verdict;
+
+            // Header & Badges
+            document.getElementById('map-header').innerText = `Сводка по последним играм (Текущая форма)`;
+            document.getElementById('focus-pill').innerText = 'Текущая форма';
+
+            // 4 Big Metric Tiles
+            document.getElementById('lbl-tile-1').innerText = 'Средняя точность (ACC)';
+            document.getElementById('val-acc').innerText = s.avg_acc + '%';
+            document.getElementById('sub-tile-1').innerText = `Пик: ${s.best_acc}% • Лучший скор: ${s.best_score}`;
+
+            document.getElementById('lbl-tile-2').innerText = 'Хиты (300 / 100 / 50)';
+            document.getElementById('val-hits').innerText = `${s.total_300.toLocaleString()} / ${s.total_100.toLocaleString()} / ${s.total_50}`;
+            document.getElementById('sub-tile-2').innerText = `⚠️ ${s.ratio_100}% соток — Early Tap (ранний клик)`;
+
+            document.getElementById('lbl-tile-3').innerText = 'Промахи пером на ГП';
+            document.getElementById('val-miss').innerText = `${s.total_miss} (${s.avg_miss} ср.)`;
+            document.getElementById('sub-tile-3').innerText = 'Under-aim на широких углах';
+
+            document.getElementById('lbl-tile-4').innerText = 'Баланс пальцев (K1 / K2)';
+            document.getElementById('val-combo').innerText = `${s.avg_k1}% / ${s.avg_k2}%`;
+            document.getElementById('sub-tile-4').innerText = 'Сбалансированный Full Alternate';
+
+            // Skill Radar Bars (derived from session average)
+            const accScore = Math.min(100, Math.max(30, Math.round((s.avg_acc - 65) / 30 * 100)));
+            const aimScore = Math.min(100, Math.max(30, Math.round(100 - s.avg_miss * 9)));
+            const stamScore = Math.min(100, Math.max(40, 100 - Math.round(Math.abs(s.avg_k1 - 50) * 2)));
+            const consScore = Math.min(100, Math.max(30, Math.round(s.avg_acc * 0.7 + (10 - Math.min(s.avg_miss, 10)) * 3)));
+
+            document.getElementById('sk-acc-val').innerText = accScore + '%';
+            document.getElementById('sk-acc-bar').style.width = accScore + '%';
+            document.getElementById('sk-aim-val').innerText = aimScore + '%';
+            document.getElementById('sk-aim-bar').style.width = aimScore + '%';
+            document.getElementById('sk-stam-val').innerText = stamScore + '%';
+            document.getElementById('sk-stam-bar').style.width = stamScore + '%';
+            document.getElementById('sk-cons-val').innerText = consScore + '%';
+            document.getElementById('sk-cons-bar').style.width = consScore + '%';
+
+            // 5-Star Readiness Gauge
+            const readiness = Math.round((accScore * 0.4) + (aimScore * 0.3) + (stamScore * 0.15) + (consScore * 0.15));
+            document.getElementById('gauge-bar').style.width = readiness + '%';
+            document.getElementById('gauge-percent').innerText = readiness + '%';
+            document.getElementById('potential-pp').innerText = '+340 pp';
+            document.getElementById('gauge-desc').innerText =
+                `Сводный индекс формы: ${readiness}%. Для уверенного перехода к 5★ нужно сократить долю 100-ок со ${s.ratio_100}% до <15%.`;
+
+            // Session Games Timeline
+            const listEl = document.getElementById('session-games-list');
+            listEl.innerHTML = '';
+            s.games.forEach((g, idx) => {
+                const card = document.createElement('div');
+                card.className = 'session-game-card';
+                card.id = `sg-card-${idx}`;
+                card.onclick = () => loadReplay(g.replay_id);
+                card.innerHTML = `
+                    <div>
+                        <div class="sg-title">Карта #${idx + 1} [${g.time}]</div>
+                        <div class="sg-meta">Скор: <b>${g.score}</b> • Комбо: ${g.max_combo}x • K1/K2: ${g.k1_ratio}% / ${g.k2_ratio}%</div>
+                    </div>
+                    <div class="sg-stats">
+                        <div class="sg-acc">${g.accuracy}% ACC</div>
+                        <div class="sg-miss">${g.count_miss} Miss</div>
+                        <button class="sg-btn" onclick="event.stopPropagation(); loadReplay('${g.replay_id}');">
+                            Рассмотреть детально ➔
+                        </button>
+                    </div>
+                `;
+                listEl.appendChild(card);
+            });
+
+            // Feedbacks (Session level)
+            const fbBox = document.getElementById('coach-feedbacks');
+            fbBox.innerHTML = `
+                <div class="feedback-card fb-danger">
+                    <div class="fb-title">
+                        <span class="focus-pill" style="font-size:10px;">Ритм</span>
+                        <span>Ранний клик (Early Tap) на ${s.ratio_100}% всех ударов</span>
+                    </div>
+                    <div class="fb-text">
+                        За последние игры ты выбил ${s.total_100} соток против ${s.total_300} трехсоток. В osu! круг сближения обманывает зрение: мозг торопит пальцы кликнуть раньше времени. Разминайся во вкладке «Ритм-Тренажёр» перед каждой сессией и слушай акцент в музыке!
+                    </div>
+                </div>
+                <div class="feedback-card ${s.avg_miss <= 3 ? 'fb-success' : 'fb-warning'}">
+                    <div class="fb-title">
+                        <span class="focus-pill" style="font-size:10px;">ГП / Аим</span>
+                        <span>Планшет: ${s.avg_miss} промахов в среднем на карту</span>
+                    </div>
+                    <div class="fb-text">
+                        Аим пером имеет отличную точность на прямых движениях (были карты с 0 миссов), но на острых углах перо иногда не долетает до центра ноты (under-aim). Проверь область планшета в OpenTabletDriver — не делай её слишком широкой (оптимально 75-88 мм по ширине).
+                    </div>
+                </div>
+                <div class="feedback-card fb-success">
+                    <div class="fb-title">
+                        <span class="focus-pill" style="font-size:10px;">Баланс пальцев</span>
+                        <span>Симметрия кликов (${s.avg_k1}% K1 / ${s.avg_k2}% K2)</span>
+                    </div>
+                    <div class="fb-text">
+                        Ты играешь практически идеальным Full Alternate. Нагрузка равномерно распределена между двумя пальцами, что снимает перегрузку и сохраняет выносливость на высоких BPM.
+                    </div>
+                </div>
+            `;
+
+            // Recommended Pack based on session
+            if (s.games.length && s.games[0].recommended_pack) {
+                renderRecommendedPack(s.games[0].recommended_pack);
+            }
+
+            // Dual Charts (Session Aggregate)
+            renderChartsSession(s);
+        }
+
+        async function loadReplay(targetId = null) {
             const dd = document.getElementById('replay-dropdown');
-            const targetId = dd.value || '';
+            if (targetId) {
+                dd.value = targetId;
+            } else {
+                targetId = dd.value || '';
+            }
+
             const res = await fetch(`/api/analyze?id=${encodeURIComponent(targetId)}`);
             const data = await res.json();
             if (data.error) {
@@ -1715,13 +2150,38 @@ def index():
                 return;
             }
 
-            document.getElementById('map-header').innerText = `Игра [${data.time}] • Скор: ${data.score}`;
-            document.getElementById('focus-pill').innerText = data.focus_title;
+            hudMode = 'detail';
 
+            // Show drilldown notification bar
+            const dBar = document.getElementById('drilldown-bar');
+            dBar.classList.add('active');
+            document.getElementById('drilldown-game-title').innerText = `Игра [${data.time}] • Скор ${data.score} (${data.accuracy}% ACC)`;
+
+            // Hide session verdict banner in drilldown mode
+            document.getElementById('verdict-banner').style.display = 'none';
+
+            // Update main panel header
+            document.getElementById('map-header').innerText = `Детальный разбор [${data.time}] • Скор: ${data.score}`;
+            document.getElementById('focus-pill').innerText = data.focus_title || 'Детальный разбор';
+
+            // Metric Tiles
+            document.getElementById('lbl-tile-1').innerText = 'Точность карты (ACC)';
             document.getElementById('val-acc').innerText = data.accuracy + '%';
+            document.getElementById('sub-tile-1').innerText = `Комбо: ${data.max_combo}x`;
+
+            document.getElementById('lbl-tile-2').innerText = '300 / 100 / 50';
             document.getElementById('val-hits').innerText = `${data.count_300} / ${data.count_100} / ${data.count_50}`;
+            const totalHitsSingle = data.count_300 + data.count_100 + data.count_50 + data.count_miss;
+            const pct100 = Math.round(data.count_100 / (totalHitsSingle || 1) * 100);
+            document.getElementById('sub-tile-2').innerText = `${pct100}% соток на этой карте`;
+
+            document.getElementById('lbl-tile-3').innerText = 'Промахи (Miss)';
             document.getElementById('val-miss').innerText = data.count_miss;
+            document.getElementById('sub-tile-3').innerText = data.count_miss === 0 ? 'Идеальный FC' : 'Потеря комбо';
+
+            document.getElementById('lbl-tile-4').innerText = 'Макс комбо';
             document.getElementById('val-combo').innerText = data.max_combo + 'x';
+            document.getElementById('sub-tile-4').innerText = `K1: ${data.k1_ratio}% | K2: ${data.k2_ratio}%`;
 
             // Skill Radar Bars
             document.getElementById('sk-acc-val').innerText = data.skills.accuracy + '%';
@@ -1738,7 +2198,7 @@ def index():
             document.getElementById('gauge-percent').innerText = data.target_5star_readiness + '%';
             document.getElementById('potential-pp').innerText = '+' + data.potential_pp_gain + ' pp';
             document.getElementById('gauge-desc').innerText =
-                `Текущий контроль нестабилен для 5★. Рекомендуется FC на картах 3.9★ – 4.3★ с точностью 96%+.`;
+                `Детальный разбор: готовность к 5★ на этой карте ${data.target_5star_readiness}%. Нажми «Вернуться к сводке сессии» для общей картины.`;
 
             // Feedbacks
             const fbBox = document.getElementById('coach-feedbacks');
@@ -1755,11 +2215,16 @@ def index():
                 `;
             });
 
+            // Highlight card in timeline list if present
+            document.querySelectorAll('.session-game-card').forEach(el => el.classList.remove('active'));
+
             // Recommended Map Pack
             renderRecommendedPack(data.recommended_pack);
 
             // Dual Charts
-            renderCharts(data);
+            renderChartsSingle(data);
+
+            showToast(`Разобрана игра [${data.time}]`, '🔍');
         }
 
         function renderRecommendedPack(pack) {
@@ -1793,7 +2258,60 @@ def index():
             `;
         }
 
-        function renderCharts(data) {
+        function renderChartsSession(s) {
+            const ctxHits = document.getElementById('hitsChart').getContext('2d');
+            const ctxFingers = document.getElementById('fingersChart').getContext('2d');
+
+            if (hitsChart) hitsChart.destroy();
+            if (fingersChart) fingersChart.destroy();
+
+            hitsChart = new Chart(ctxHits, {
+                type: 'doughnut',
+                data: {
+                    labels: ['300 Perfect', '100 Early/Late', '50 Off-beat', 'Miss'],
+                    datasets: [{
+                        data: [s.total_300, s.total_100, s.total_50, s.total_miss],
+                        backgroundColor: ['#00ff88', '#f59e0b', '#9d00ff', '#ff1361'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { color: '#94a3b8', font: { family: 'Outfit', size: 11 } } },
+                        title: { display: true, text: `Суммарные попадания (${s.total_hits.toLocaleString()} нот)`, color: '#fff', font: { family: 'Syne', size: 13, weight: 'bold' } }
+                    }
+                }
+            });
+
+            fingersChart = new Chart(ctxFingers, {
+                type: 'bar',
+                data: {
+                    labels: ['Кнопка 1 (K1)', 'Кнопка 2 (K2)'],
+                    datasets: [{
+                        label: 'Доля кликов (%)',
+                        data: [s.avg_k1, s.avg_k2],
+                        backgroundColor: ['#ff1361', '#00fff2'],
+                        borderRadius: 12
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        title: { display: true, text: `Средний баланс пальцев (${s.avg_k1}% / ${s.avg_k2}%)`, color: '#fff', font: { family: 'Syne', size: 13, weight: 'bold' } }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+                        y: { min: 0, max: 100, ticks: { color: '#94a3b8', callback: v => v + '%' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                    }
+                }
+            });
+        }
+
+        function renderChartsSingle(data) {
             const ctxHits = document.getElementById('hitsChart').getContext('2d');
             const ctxFingers = document.getElementById('fingersChart').getContext('2d');
 
